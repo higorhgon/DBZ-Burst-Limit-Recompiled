@@ -9,6 +9,13 @@ project(burstlimit LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# The recompiled code goes into libmain.so on Android, so it must be
+# position independent like the SDK's own targets. The NDK's toolchain adds
+# -fPIC by itself, a native clang (Termux) doesn't.
+if(NOT WIN32)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+
 if(NOT REXSDK_DIR AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rexglue-sdk/CMakeLists.txt")
     set(REXSDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rexglue-sdk" CACHE PATH
         "Path to rexglue-sdk source tree")
