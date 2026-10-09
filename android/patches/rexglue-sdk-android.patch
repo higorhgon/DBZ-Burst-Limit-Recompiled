@@ -205,7 +205,7 @@ index 50638d6..7099559 100644
  namespace rex {
  namespace ui {
 diff --git a/resources/templates/codegen/pch_h.inja b/resources/templates/codegen/pch_h.inja
-index 68274d2..30b560e 100644
+index 68274d2..636f9e2 100644
 --- a/resources/templates/codegen/pch_h.inja
 +++ b/resources/templates/codegen/pch_h.inja
 @@ -124,7 +124,7 @@ extern PPCFuncMapping PPCFuncMappings[];
@@ -217,8 +217,26 @@ index 68274d2..30b560e 100644
  #define REX_PHYS_HOST_OFFSET(addr) (((u32)(addr) >= 0xE0000000u) ? 0x1000u : 0u)
  #else
  #define REX_PHYS_HOST_OFFSET(addr) 0u
+@@ -132,6 +132,17 @@ extern PPCFuncMapping PPCFuncMappings[];
+ 
+ #define REX_RAW_ADDR(x) (base + (u32)(x) + REX_PHYS_HOST_OFFSET(x))
+ 
++// sync / lwsync / eieio. x86 orders memory strongly enough that they need no
++// instruction; ARM64 reorders loads and stores, so guest locks and lock-free
++// queues need real fences there.
++#if defined(__aarch64__) || defined(_M_ARM64)
++#define REX_SYNC() __atomic_thread_fence(__ATOMIC_SEQ_CST)
++#define REX_LWSYNC() __atomic_thread_fence(__ATOMIC_ACQ_REL)
++#else
++#define REX_SYNC() ((void)0)
++#define REX_LWSYNC() ((void)0)
++#endif
++
+ #define REX_LOAD_U8(x) (*(volatile u8*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
+ #define REX_LOAD_U16(x) __builtin_bswap16(*(volatile u16*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
+ #define REX_LOAD_U32(x) __builtin_bswap32(*(volatile u32*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
 diff --git a/resources/templates/test/ppc_config_h.inja b/resources/templates/test/ppc_config_h.inja
-index 0c334f8..29a0375 100644
+index 0c334f8..c4534c3 100644
 --- a/resources/templates/test/ppc_config_h.inja
 +++ b/resources/templates/test/ppc_config_h.inja
 @@ -73,7 +73,7 @@
@@ -230,6 +248,58 @@ index 0c334f8..29a0375 100644
  #define REX_PHYS_HOST_OFFSET(addr) (((u32)(addr) >= 0xE0000000u) ? 0x1000u : 0u)
  #else
  #define REX_PHYS_HOST_OFFSET(addr) 0u
+@@ -81,6 +81,17 @@
+ 
+ #define REX_RAW_ADDR(x) (base + (u32)(x) + REX_PHYS_HOST_OFFSET(x))
+ 
++// sync / lwsync / eieio. x86 orders memory strongly enough that they need no
++// instruction; ARM64 reorders loads and stores, so guest locks and lock-free
++// queues need real fences there.
++#if defined(__aarch64__) || defined(_M_ARM64)
++#define REX_SYNC() __atomic_thread_fence(__ATOMIC_SEQ_CST)
++#define REX_LWSYNC() __atomic_thread_fence(__ATOMIC_ACQ_REL)
++#else
++#define REX_SYNC() ((void)0)
++#define REX_LWSYNC() ((void)0)
++#endif
++
+ #define REX_LOAD_U8(x) (*(volatile u8*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
+ #define REX_LOAD_U16(x) __builtin_bswap16(*(volatile u16*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
+ #define REX_LOAD_U32(x) __builtin_bswap32(*(volatile u32*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
+diff --git a/src/codegen/builders/system.cpp b/src/codegen/builders/system.cpp
+index b2d70f5..ca1ab5b 100644
+--- a/src/codegen/builders/system.cpp
++++ b/src/codegen/builders/system.cpp
+@@ -31,20 +31,23 @@ bool build_attn(BuilderContext& ctx) {
+ }
+ 
+ bool build_sync(BuilderContext& ctx) {
+-  // Memory barrier, x86 has strong ordering so this is a no-op
+-  (void)ctx;
++  // Full memory barrier: a no-op on x86 (strong ordering), a real fence on
++  // weakly ordered hosts (ARM64), see REX_SYNC in the generated header.
++  ctx.println("\tREX_SYNC();");
+   return true;
+ }
+ 
+ bool build_lwsync(BuilderContext& ctx) {
+-  // Lightweight memory barrier, x86 has strong ordering so this is a no-op
+-  (void)ctx;
++  // Lightweight memory barrier: a no-op on x86 (strong ordering), a real
++  // fence on weakly ordered hosts (ARM64), see REX_LWSYNC.
++  ctx.println("\tREX_LWSYNC();");
+   return true;
+ }
+ 
+ bool build_eieio(BuilderContext& ctx) {
+-  // Enforce in-order execution of I/O, x86 has strong ordering so this is a no-op
+-  (void)ctx;
++  // Enforce in-order execution of I/O (also used as a store barrier before a
++  // lock release): a no-op on x86 (strong ordering), a fence on ARM64.
++  ctx.println("\tREX_LWSYNC();");
+   return true;
+ }
+ 
 diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
 index 04b954d..e88f288 100644
 --- a/src/core/CMakeLists.txt
@@ -599,7 +669,7 @@ index b52bf39..af2df73 100644
  
    // Use /dev/ashmem on API versions below 26, which added ASharedMemory.
 diff --git a/src/core/threading_posix.cpp b/src/core/threading_posix.cpp
-index 9ac8d15..9d153c5 100644
+index 9ac8d15..fa7c6a9 100644
 --- a/src/core/threading_posix.cpp
 +++ b/src/core/threading_posix.cpp
 @@ -71,14 +71,11 @@ static void* android_libc_;
@@ -649,6 +719,25 @@ index 9ac8d15..9d153c5 100644
          auto native_mutex = static_cast<pthread_mutex_t*>(handles[i]->mutex_.native_handle());
          int result = pthread_mutex_trylock(native_mutex);
          if (result == 0 || result == EOWNERDEAD) {
+@@ -876,8 +873,16 @@ class PosixCondition<Thread> : public PosixConditionBase {
+     sigval value{};
+     value.sival_ptr = this;
+ #if REX_PLATFORM_ANDROID
+-    int result = sigqueue(pthread_gettid_np(thread_),
+-                          GetSystemSignal(SignalType::kThreadUserCallback), value);
++    // sigqueue() targets a process, and Bionic has no pthread_sigqueue before
++    // API 29: queue the signal to the thread with rt_tgsigqueueinfo.
++    siginfo_t info{};
++    info.si_signo = GetSystemSignal(SignalType::kThreadUserCallback);
++    info.si_code = SI_QUEUE;
++    info.si_pid = getpid();
++    info.si_uid = getuid();
++    info.si_value = value;
++    int result = static_cast<int>(syscall(SYS_rt_tgsigqueueinfo, getpid(),
++                                          pthread_gettid_np(thread_), info.si_signo, &info));
+ #else
+     int result = pthread_sigqueue(thread_, GetSystemSignal(SignalType::kThreadUserCallback), value);
+ #endif
 diff --git a/src/kernel/xam/xam_net.cpp b/src/kernel/xam/xam_net.cpp
 index fa7f662..0d39faf 100644
 --- a/src/kernel/xam/xam_net.cpp
@@ -680,6 +769,41 @@ index fa7f662..0d39faf 100644
  
      const int received = recvfrom(
          native_socket, reinterpret_cast<char*>(packet.data()),
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp b/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp
+index 8b862fc..53af533 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp
+@@ -399,7 +399,30 @@ void RtlEnterCriticalSection_entry(ppc_ptr_t<X_RTL_CRITICAL_SECTION> cs) {
+ 
+   if (rex::thread::atomic_inc(&cs->lock_count) != 0) {
+     // Create a full waiter.
++#if REX_PLATFORM_ANDROID
++    // The event is auto-reset, so waiting in 5 s slices is the same wait; a
++    // slice that times out logs who holds the lock (deadlock diagnostics).
++    uint64_t timeout = static_cast<uint64_t>(-50000000ll);  // 5 s, relative.
++    while (xeKeWaitForSingleObject(reinterpret_cast<void*>(cs.host_address()), 8, 0, 0,
++                                   &timeout) == X_STATUS_TIMEOUT) {
++      uint32_t owner = cs->owning_thread;
++      std::string owner_name = "?";
++      for (auto& thread : REX_KERNEL_OBJECTS()->GetObjectsByType<XThread>()) {
++        if (thread->guest_object() == owner) {
++          owner_name = fmt::format("'{}' thread_id {:X}", thread->name(), thread->thread_id());
++          break;
++        }
++      }
++      REXKRNL_WARN(
++          "RtlEnterCriticalSection: '{}' waiting > 5 s for cs {:08X}: owner {:08X} ({}), "
++          "lock_count {}, recursion_count {}",
++          XThread::GetCurrentThread()->name(), cs.guest_address(), owner, owner_name,
++          cs->lock_count, static_cast<int32_t>(cs->recursion_count));
++      timeout = static_cast<uint64_t>(-50000000ll);
++    }
++#else
+     xeKeWaitForSingleObject(reinterpret_cast<void*>(cs.host_address()), 8, 0, 0, nullptr);
++#endif
+   }
+ 
+   assert_true(cs->owning_thread == 0);
 diff --git a/src/system/xsocket.cpp b/src/system/xsocket.cpp
 index f772895..cff4b65 100644
 --- a/src/system/xsocket.cpp

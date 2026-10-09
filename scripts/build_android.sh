@@ -169,7 +169,13 @@ from it at build time (the APK itself asks for the ISO on the phone). See README
   fi
   cmake "${cmake_args[@]}"
   # Codegen first (it writes generated/default/sources.cmake), then configure
-  # again so the generated sources are part of the build.
+  # again so the generated sources are part of the build. CMake only re-runs it
+  # when its inputs change, not when the recompiler does: drop the stamp then.
+  STAMP="$GENERATED/codegen.build.stamp"
+  if [ "$COMPILE_CHECK" -eq 0 ] && [ -f "$STAMP" ] && [ "$HOST_REXGLUE" -nt "$STAMP" ]; then
+    echo "rexglue is newer than the generated code: recompiling the game code again"
+    rm -f "$STAMP"
+  fi
   cmake --build "$TARGET_BUILD" --target burstlimit_codegen -j "$JOBS"
   cmake "$TARGET_BUILD" >/dev/null
   cmake --build "$TARGET_BUILD" --target burstlimit -j "$JOBS"

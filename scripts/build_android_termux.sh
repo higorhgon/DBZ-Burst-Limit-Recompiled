@@ -131,6 +131,15 @@ if [ "$APK_ONLY" -eq 0 ]; then
     -DCMAKE_EXE_LINKER_FLAGS="-Wl,-z,max-page-size=16384"
 
   log "Recompiling the game code from default.xex (rexglue codegen)"
+  # CMake only re-runs the codegen when its inputs change, not when the
+  # recompiler does: drop the stamp when rexglue is newer than the output.
+  cmake --build "$BUILD" --target rexglue -j "$JOBS"
+  REXGLUE_BIN="$(find "$SDK_SRC/out" -name rexglue -type f -perm -u+x | head -1)"
+  STAMP="$ROOT/generated/default/codegen.build.stamp"
+  if [ -n "$REXGLUE_BIN" ] && [ -f "$STAMP" ] && [ "$REXGLUE_BIN" -nt "$STAMP" ]; then
+    echo "rexglue is newer than the generated code: recompiling the game code again"
+    rm -f "$STAMP"
+  fi
   cmake --build "$BUILD" --target burstlimit_codegen -j "$JOBS"
   cmake "$BUILD" >/dev/null
 
