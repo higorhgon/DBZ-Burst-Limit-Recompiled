@@ -215,8 +215,9 @@ SDL_JAVA="$SDK_SRC/thirdparty/sdl3/android-project/app/src/main/java"
 find "$APP/java" "$SDL_JAVA" "$WORK/gen" -name '*.java' > "$WORK/sources.txt"
 javac -nowarn -encoding UTF-8 -source 17 -target 17 -Xlint:-options \
   -classpath "$PLATFORM_JAR" -d "$WORK/classes" @"$WORK/sources.txt"
+mapfile -t classes < <(find "$WORK/classes" -name '*.class')
 "$BUILD_TOOLS/d8" --release --min-api "$API_LEVEL" --lib "$PLATFORM_JAR" \
-  --output "$WORK/dex" $(find "$WORK/classes" -name '*.class')
+  --output "$WORK/dex" "${classes[@]}"
 
 cp "$WORK/base.apk" "$WORK/unsigned.apk"
 (cd "$WORK/dex" && zip -q -X "$WORK/unsigned.apk" classes*.dex)

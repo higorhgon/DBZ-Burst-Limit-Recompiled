@@ -71,13 +71,7 @@ jobs:
           fetch-depth: 0
 
       - name: Check out the SDK and the dependencies the build uses
-        run: |
-          git submodule update --init --depth 1 thirdparty/rexglue-sdk
-          cd thirdparty/rexglue-sdk
-          for dep in cli11 libmspack FFmpeg tomlplusplus simde xxHash spdlog fmt utfcpp imgui sdl3 \
-                     vulkan-headers vulkan-memory-allocator spirv-headers spirv-tools glslang o1heap inja; do
-            git submodule update --init --depth 1 "thirdparty/$dep"
-          done
+        run: scripts/android_submodules.sh
 
       - name: Install build tools
         run: |
@@ -176,12 +170,14 @@ jobs:
         run: |
           export CCACHE_DIR="$HOME/.cache/ccache"
           if [ -z "$APK_VERSION_NAME" ]; then
-            export APK_VERSION_NAME="0.4.0-android+$(git rev-parse --short HEAD)"
+            APK_VERSION_NAME="0.4.0-android+$(git rev-parse --short HEAD)"
+            export APK_VERSION_NAME
           fi
           # The commit count grows along the branch, for commit builds and
           # releases alike, so a newer APK always installs over an older one.
           if [ -z "$APK_VERSION_CODE" ]; then
-            export APK_VERSION_CODE="$(git rev-list --count HEAD)"
+            APK_VERSION_CODE="$(git rev-list --count HEAD)"
+            export APK_VERSION_CODE
           fi
           ccache -z
           if [ "$KIND" = "apk" ]; then

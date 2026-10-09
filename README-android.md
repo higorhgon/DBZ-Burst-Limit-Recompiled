@@ -103,8 +103,9 @@ sdkmanager --sdk_root="$HOME/Android/Sdk" "platforms;android-35" "build-tools;35
 ### Build
 
 ```sh
-git clone --recursive <this repository>
+git clone <this repository>
 cd DBZ-Burst-Limit-Recompiled
+scripts/android_submodules.sh   # or: git submodule update --init --recursive
 cp /path/to/your/game/default.xex game_data_root/
 ANDROID_HOME="$HOME/Android/Sdk" scripts/build_android.sh
 ```
@@ -128,6 +129,46 @@ code (what CI runs without the game): the APK it makes does not run the game.
 
 `android/` is also a normal Gradle project (Android Studio) for the Java side; it takes the native libraries from
 the folder given with `-PnativeLibsDir=` (the script stages them in `out/android/lib`).
+
+### Building on the phone with Termux
+
+The phone can do the whole build itself: Termux runs the recompiler on `default.xex` and compiles the game code
+with its own clang, so `default.xex` never leaves the phone and no PC is needed. It takes a while (about an hour or
+more, depending on the phone) and roughly 10 GB of free space; keep the phone charging.
+
+1. Install **Termux from F-Droid or GitHub** (the Play Store version is outdated), open it and run:
+
+   ```sh
+   termux-setup-storage
+   pkg update -y && pkg upgrade -y
+   pkg install -y git cmake ninja clang lld llvm python openjdk-21 aapt aapt2 apksigner d8 curl unzip libc++
+   termux-wake-lock
+   ```
+
+2. Get the code (only the dependencies the Android build uses, shallow):
+
+   ```sh
+   cd ~
+   git clone --depth 1 -b <branch> https://github.com/higorhgon/DBZ-Burst-Limit-Recompiled.git
+   cd DBZ-Burst-Limit-Recompiled
+   scripts/android_submodules.sh
+   ```
+
+3. Build, giving it your ISO (it takes `default.xex` out of it), or with `default.xex` copied to
+   `game_data_root/`:
+
+   ```sh
+   scripts/build_android_termux.sh --iso ~/storage/downloads/<your game>.iso
+   # or: mkdir -p game_data_root && cp ~/storage/downloads/default.xex game_data_root/ && scripts/build_android_termux.sh
+   ```
+
+4. The APK is copied to **Downloads**: open it in the file manager to install it. On its first start it asks for the
+   ISO (or extracted folder) as usual.
+
+If the build gets killed (the phone ran out of memory), run it again with fewer jobs: `JOBS=1
+scripts/build_android_termux.sh` (it continues where it stopped). The signing key is made in
+`~/.burstlimit/burstlimit.keystore`: keep it to install later builds over this one. `scripts/xiso_extract.py
+game.iso out_dir` extracts a disc image on any machine with Python.
 
 ### GitHub Actions
 

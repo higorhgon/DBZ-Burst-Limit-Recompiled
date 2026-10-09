@@ -489,12 +489,15 @@ index 0000000..799bde4
 +
 +#endif  // REX_PLATFORM_ANDROID
 diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
-index b52bf39..7ecc8ff 100644
+index b52bf39..af2df73 100644
 --- a/src/core/memory_posix.cpp
 +++ b/src/core/memory_posix.cpp
-@@ -53,8 +53,9 @@
+@@ -52,9 +52,12 @@
+ #include <sys/ioctl.h>
  
  #include <linux/ashmem.h>
++#include <linux/memfd.h>
++#include <sys/syscall.h>
  
 -// TODO(tomc): Android or maybe na. idk
 -// #include "xenia/base/main_android.h"
@@ -504,7 +507,29 @@ index b52bf39..7ecc8ff 100644
  #endif
  
  namespace rex {
-@@ -115,7 +116,14 @@ size_t page_size() {
+@@ -91,14 +94,13 @@ static void* libandroid_;
+ static int (*android_ASharedMemory_create_)(const char* name, size_t size);
+ 
+ void AndroidInitialize() {
+-  if (rex::GetAndroidApiLevel() >= 26) {
+-    libandroid_ = dlopen("libandroid.so", RTLD_NOW);
+-    assert_not_null(libandroid_);
+-    if (libandroid_) {
+-      android_ASharedMemory_create_ = reinterpret_cast<decltype(android_ASharedMemory_create_)>(
+-          dlsym(libandroid_, "ASharedMemory_create"));
+-      assert_not_null(android_ASharedMemory_create_);
+-    }
++  // Looked up rather than gated on the API level, which can read as unknown
++  // (-1) where the system properties aren't readable. Missing below API 26:
++  // CreateFileMappingHandle falls back to /dev/ashmem.
++  libandroid_ = dlopen("libandroid.so", RTLD_NOW);
++  if (libandroid_) {
++    android_ASharedMemory_create_ = reinterpret_cast<decltype(android_ASharedMemory_create_)>(
++        dlsym(libandroid_, "ASharedMemory_create"));
+   }
+ }
+ 
+@@ -115,7 +117,14 @@ size_t page_size() {
    return getpagesize();
  }
  size_t allocation_granularity() {
@@ -519,11 +544,54 @@ index b52bf39..7ecc8ff 100644
  }
  
  uint32_t ToPosixProtectFlags(PageAccess access) {
+@@ -435,8 +444,20 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, siz
+   // TODO(Triang3l): Check if memfd can be used instead on API 30+.
+   if (android_ASharedMemory_create_) {
+     int sharedmem_fd = android_ASharedMemory_create_(path.c_str(), length);
+-    return sharedmem_fd >= 0 ? static_cast<FileMappingHandle>(sharedmem_fd)
+-                             : kFileMappingHandleInvalid;
++    if (sharedmem_fd >= 0) {
++      return static_cast<FileMappingHandle>(sharedmem_fd);
++    }
++  }
++
++  // memfd (Linux 3.17+), where ASharedMemory is missing or fails: kernels are
++  // moving shared memory from /dev/ashmem to memfd. Through syscall(), since
++  // bionic only declares memfd_create from API 30.
++  int memfd = static_cast<int>(syscall(__NR_memfd_create, path.c_str(), MFD_CLOEXEC));
++  if (memfd >= 0) {
++    if (ftruncate64(memfd, static_cast<off64_t>(length)) == 0) {
++      return static_cast<FileMappingHandle>(memfd);
++    }
++    close(memfd);
+   }
+ 
+   // Use /dev/ashmem on API versions below 26, which added ASharedMemory.
 diff --git a/src/core/threading_posix.cpp b/src/core/threading_posix.cpp
-index 9ac8d15..12df8ae 100644
+index 9ac8d15..9d153c5 100644
 --- a/src/core/threading_posix.cpp
 +++ b/src/core/threading_posix.cpp
-@@ -270,7 +270,7 @@ static sem_t* RexCreateAnonymousSemaphore() {
+@@ -71,14 +71,11 @@ static void* android_libc_;
+ static int (*android_pthread_getname_np_)(pthread_t pthread, char* buf, size_t n);
+ 
+ void AndroidInitialize() {
+-  if (rex::GetAndroidApiLevel() >= 26) {
+-    android_libc_ = dlopen("libc.so", RTLD_NOW);
+-    assert_not_null(android_libc_);
+-    if (android_libc_) {
+-      android_pthread_getname_np_ = reinterpret_cast<decltype(android_pthread_getname_np_)>(
+-          dlsym(android_libc_, "pthread_getname_np"));
+-      assert_not_null(android_pthread_getname_np_);
+-    }
++  // Looked up rather than gated on the API level (see memory_posix.cpp).
++  android_libc_ = dlopen("libc.so", RTLD_NOW);
++  if (android_libc_) {
++    android_pthread_getname_np_ = reinterpret_cast<decltype(android_pthread_getname_np_)>(
++        dlsym(android_libc_, "pthread_getname_np"));
+   }
+ }
+ 
+@@ -270,7 +267,7 @@ static sem_t* RexCreateAnonymousSemaphore() {
  class PosixConditionBase {
   public:
    PosixConditionBase() {
@@ -532,7 +600,7 @@ index 9ac8d15..12df8ae 100644
      // Use robust mutexes so waits can recover if owner thread terminates.
      pthread_mutexattr_t attr;
      if (pthread_mutexattr_init(&attr) == 0) {
-@@ -290,7 +290,7 @@ class PosixConditionBase {
+@@ -290,7 +287,7 @@ class PosixConditionBase {
    WaitResult Wait(std::chrono::milliseconds timeout) {
      bool executed;
      auto predicate = [this] { return this->signaled(); };
@@ -541,7 +609,7 @@ index 9ac8d15..12df8ae 100644
      auto native_mutex = static_cast<pthread_mutex_t*>(mutex_.native_handle());
      int lock_result = pthread_mutex_lock(native_mutex);
      if (lock_result == EOWNERDEAD) {
-@@ -344,7 +344,7 @@ class PosixConditionBase {
+@@ -344,7 +341,7 @@ class PosixConditionBase {
        locks.reserve(handles.size());
  
        for (size_t i = 0; i < handles.size(); ++i) {
@@ -751,10 +819,10 @@ index 77bb1dc..a66e5ca 100644
  
  int main(int argc, char* argv[]) {
 diff --git a/thirdparty/CMakeLists.txt b/thirdparty/CMakeLists.txt
-index b148128..894bbfc 100644
+index b148128..110099b 100644
 --- a/thirdparty/CMakeLists.txt
 +++ b/thirdparty/CMakeLists.txt
-@@ -321,8 +321,18 @@ set(SDL_DUMMYAUDIO OFF CACHE BOOL "" FORCE)
+@@ -321,8 +321,23 @@ set(SDL_DUMMYAUDIO OFF CACHE BOOL "" FORCE)
  set(SDL_DUMMYVIDEO OFF CACHE BOOL "" FORCE)
  
  # Linux video and audio backends. Both video drivers are always built so the
@@ -771,6 +839,11 @@ index b148128..894bbfc 100644
 +    set(SDL_HAPTIC      ON  CACHE BOOL "" FORCE)
 +    set(SDL_SENSOR      ON  CACHE BOOL "" FORCE)
 +    set(SDL_FILESYSTEM  ON  CACHE BOOL "" FORCE)
++    # A native build in Termux can find its X11 / PulseAudio packages: the
++    # app only uses Android's own drivers.
++    foreach(_sdl_desktop_option X11 WAYLAND ALSA PULSEAUDIO PIPEWIRE JACK SNDIO KMSDRM OFFSCREEN)
++        set(SDL_${_sdl_desktop_option} OFF CACHE BOOL "" FORCE)
++    endforeach()
 +elseif(UNIX AND NOT APPLE)
      set(SDL_X11               ON  CACHE BOOL "" FORCE)
      set(SDL_WAYLAND           ON  CACHE BOOL "" FORCE)
