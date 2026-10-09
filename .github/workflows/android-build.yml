@@ -1,0 +1,220 @@
+# Shared Android build, called by android.yml (every commit) and
+# android-release.yml (releases).
+#
+# The recompiler needs the game's default.xex, which is never in the
+# repository. With the GAME_XEX_URL secret set, the build downloads it, checks
+# its SHA-1 (US version) and makes the real APK. Without it (forks, pull
+# requests from forks, or before the secret is set) it runs
+# scripts/build_android.sh --compile-check: everything is compiled and
+# packaged with a stand-in for the game code, which checks the commit but
+# makes no playable APK.
+#
+# Secrets (Settings > Secrets and variables > Actions), see README-android.md:
+#   GAME_XEX_URL          direct download URL of default.xex (private!)
+#   GAME_XEX_AUTH_HEADER  optional HTTP header for that URL, e.g. "Authorization: Bearer <token>"
+#   APK_KEYSTORE_BASE64   optional signing key (base64 of a .keystore / .jks)
+#   APK_KEYSTORE_PASS     its password
+#   APK_KEY_ALIAS         its key alias
+
+name: Android build (shared)
+
+on:
+  workflow_call:
+    inputs:
+      version-name:
+        description: APK versionName
+        type: string
+        default: ""
+      version-code:
+        description: APK versionCode
+        type: string
+        default: ""
+      release:
+        description: Release build (requires the game executable and the signing key)
+        type: boolean
+        default: false
+    outputs:
+      kind:
+        description: '"apk" (playable) or "compile-check"'
+        value: ${{ jobs.build.outputs.kind }}
+      artifact:
+        description: Name of the uploaded artifact
+        value: ${{ jobs.build.outputs.artifact }}
+
+permissions:
+  contents: read
+
+env:
+  NDK_VERSION: 29.0.14206865
+  PLATFORM: android-35
+  BUILD_TOOLS: 35.0.0
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    outputs:
+      kind: ${{ steps.mode.outputs.kind }}
+      artifact: ${{ steps.upload.outputs.artifact }}
+    steps:
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/powershell /usr/local/lib/node_modules
+          df -h /
+
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 0
+
+      - name: Check out the SDK and the dependencies the build uses
+        run: |
+          git submodule update --init --depth 1 thirdparty/rexglue-sdk
+          cd thirdparty/rexglue-sdk
+          for dep in cli11 libmspack FFmpeg tomlplusplus simde xxHash spdlog fmt utfcpp imgui sdl3 \
+                     vulkan-headers vulkan-memory-allocator spirv-headers spirv-tools glslang o1heap inja; do
+            git submodule update --init --depth 1 "thirdparty/$dep"
+          done
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            clang-20 lld-20 ninja-build ccache zip unzip python3-jinja2 \
+            libx11-dev libx11-xcb-dev libxcb1-dev libxcursor-dev libxext-dev libxrandr-dev libxi-dev \
+            libxss-dev libxtst-dev libxfixes-dev libxinerama-dev libxkbcommon-dev libwayland-dev \
+            wayland-protocols libegl-dev libdecor-0-dev libdrm-dev libgbm-dev libasound2-dev \
+            libpulse-dev libpipewire-0.3-dev
+          clang-20 --version | head -1
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install the Android SDK packages
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install "ndk;$NDK_VERSION" "platforms;$PLATFORM" "build-tools;$BUILD_TOOLS" >/dev/null
+          echo "ANDROID_NDK=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Get the game executable
+        id: mode
+        env:
+          GAME_XEX_URL: ${{ secrets.GAME_XEX_URL }}
+          GAME_XEX_AUTH_HEADER: ${{ secrets.GAME_XEX_AUTH_HEADER }}
+          RELEASE: ${{ inputs.release }}
+        run: |
+          if [ -z "$GAME_XEX_URL" ]; then
+            if [ "$RELEASE" = "true" ]; then
+              echo "::error::A release needs the GAME_XEX_URL secret (see README-android.md)."
+              exit 1
+            fi
+            echo "::notice::GAME_XEX_URL is not set: compile check only (no playable APK)."
+            echo "kind=compile-check" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir -p game_data_root
+          headers=(-H "Accept: application/octet-stream")
+          if [ -n "$GAME_XEX_AUTH_HEADER" ]; then
+            headers+=(-H "$GAME_XEX_AUTH_HEADER")
+          fi
+          curl -fsSL --retry 3 "${headers[@]}" -o game_data_root/default.xex "$GAME_XEX_URL" ||
+            { echo "::error::Downloading default.xex failed (check GAME_XEX_URL / GAME_XEX_AUTH_HEADER)."; exit 1; }
+          sha="$(sha1sum game_data_root/default.xex | cut -d' ' -f1)"
+          if [ "$sha" != "aec598f88cf51181fc377b148e0b1ad30db4485c" ]; then
+            echo "::error::default.xex is not the US version (SHA-1 $sha)."
+            exit 1
+          fi
+          echo "kind=apk" >> "$GITHUB_OUTPUT"
+
+      - name: Signing key
+        env:
+          APK_KEYSTORE_BASE64: ${{ secrets.APK_KEYSTORE_BASE64 }}
+          APK_KEYSTORE_PASS: ${{ secrets.APK_KEYSTORE_PASS }}
+          APK_KEY_ALIAS: ${{ secrets.APK_KEY_ALIAS }}
+          RELEASE: ${{ inputs.release }}
+        run: |
+          if [ -n "$APK_KEYSTORE_BASE64" ]; then
+            echo "$APK_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            {
+              echo "APK_KEYSTORE=$RUNNER_TEMP/release.keystore"
+              echo "APK_KEYSTORE_PASS=$APK_KEYSTORE_PASS"
+              echo "APK_KEY_ALIAS=$APK_KEY_ALIAS"
+            } >> "$GITHUB_ENV"
+          elif [ "$RELEASE" = "true" ]; then
+            echo "::error::A release needs the APK_KEYSTORE_BASE64 / APK_KEYSTORE_PASS / APK_KEY_ALIAS secrets:"
+            echo "::error::Android only installs an update signed with the same key as the installed app."
+            exit 1
+          else
+            echo "::notice::No APK_KEYSTORE_BASE64: signed with a throwaway key (can't update a release install)."
+          fi
+
+      - name: Restore the compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-android-${{ steps.mode.outputs.kind }}-${{ github.sha }}
+          restore-keys: |
+            ccache-android-${{ steps.mode.outputs.kind }}-
+
+      - name: Build
+        env:
+          HOST_CC: clang-20
+          HOST_CXX: clang++-20
+          USE_CCACHE: "1"
+          CCACHE_MAXSIZE: 4G
+          CCACHE_COMPILERCHECK: content
+          APK_VERSION_NAME: ${{ inputs.version-name }}
+          APK_VERSION_CODE: ${{ inputs.version-code }}
+          KIND: ${{ steps.mode.outputs.kind }}
+        run: |
+          export CCACHE_DIR="$HOME/.cache/ccache"
+          if [ -z "$APK_VERSION_NAME" ]; then
+            export APK_VERSION_NAME="0.4.0-android+$(git rev-parse --short HEAD)"
+          fi
+          # The commit count grows along the branch, for commit builds and
+          # releases alike, so a newer APK always installs over an older one.
+          if [ -z "$APK_VERSION_CODE" ]; then
+            export APK_VERSION_CODE="$(git rev-list --count HEAD)"
+          fi
+          ccache -z
+          if [ "$KIND" = "apk" ]; then
+            scripts/build_android.sh
+          else
+            scripts/build_android.sh --compile-check
+          fi
+          ccache -s
+
+      - name: Upload
+        id: upload
+        if: steps.mode.outputs.kind == 'apk'
+        env:
+          NAME: DBZ-Burst-Limit-Recompiled-android-${{ github.sha }}
+        run: echo "artifact=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the APK
+        if: steps.mode.outputs.kind == 'apk'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.upload.outputs.artifact }}
+          path: out/android/DBZ-Burst-Limit-Recompiled-android.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Summary
+        env:
+          KIND: ${{ steps.mode.outputs.kind }}
+        run: |
+          if [ "$KIND" = "apk" ]; then
+            echo "### APK built" >> "$GITHUB_STEP_SUMMARY"
+            echo "Download it from the **Artifacts** of this run." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Compile check passed" >> "$GITHUB_STEP_SUMMARY"
+            echo "Built with a stand-in for the game code (no \`GAME_XEX_URL\` secret), so no APK is published." >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -1,0 +1,30 @@
+# Builds the Android APK on every commit (see android-build.yml).
+#
+# With the GAME_XEX_URL secret: the playable APK, as an artifact of the run.
+# Without it (forks, pull requests from forks): a compile check only.
+
+name: Android
+
+on:
+  push:
+    branches: ["**"]
+    paths-ignore:
+      - "**.md"
+  pull_request:
+    paths-ignore:
+      - "**.md"
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # A pull request from a branch of this repository is already built by its
+    # push; build pull requests from forks only.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    uses: ./.github/workflows/android-build.yml
+    secrets: inherit

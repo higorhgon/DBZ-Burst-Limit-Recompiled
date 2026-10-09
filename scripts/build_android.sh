@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Builds the Android APK (arm64-v8a).
 #
-#   scripts/build_android.sh            full build: codegen + native + APK
-#   scripts/build_android.sh --apk-only repackage the APK from the last native build
+#   scripts/build_android.sh                 full build: codegen + native + APK
+#   scripts/build_android.sh --apk-only      repackage the APK from the last native build
+#   scripts/build_android.sh --compile-check build everything without default.xex, with a
+#                                            stand-in for the game code (CI): the APK it makes
+#                                            does NOT run the game
 #
 # Needs: game_data_root/default.xex (US version, the recompiler reads it), the
 # Android SDK (platform + build-tools) and NDK r28 or newer, CMake, Ninja,
@@ -16,6 +19,8 @@
 #   APK_KEYSTORE, APK_KEY_ALIAS,     release signing key; without it a key is made
 #   APK_KEYSTORE_PASS                in out/android/burstlimit.keystore and reused
 #   BURSTLIMIT_VERSION_OVERRIDE      online version string (see README)
+#   APK_VERSION_NAME, APK_VERSION_CODE  APK version (default 0.4.0-android, 1)
+#   USE_CCACHE=1                     compile through ccache
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,13 +36,19 @@ VERSION_CODE="${APK_VERSION_CODE:-1}"
 PACKAGE="com.dbzburstlimit.recompiled"
 
 APK_ONLY=0
+COMPILE_CHECK=0
 for arg in "$@"; do
   case "$arg" in
     --apk-only) APK_ONLY=1 ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    --compile-check) COMPILE_CHECK=1 ;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; exit 2 ;;
   esac
 done
+
+if [ "$COMPILE_CHECK" -eq 1 ]; then
+  APK_NAME="DBZ-Burst-Limit-Recompiled-android-compile-check.apk"
+fi
 
 log() { printf '\n==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -72,6 +83,11 @@ NDK_SYSROOT_LIB="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/
 for tool in cmake ninja javac keytool zip unzip; do
   command -v "$tool" >/dev/null || die "$tool not found"
 done
+LAUNCHER_ARGS=()
+if [ "${USE_CCACHE:-0}" = "1" ]; then
+  command -v ccache >/dev/null || die "USE_CCACHE=1 but ccache not found"
+  LAUNCHER_ARGS=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
+fi
 HOST_CC="${HOST_CC:-clang}"
 HOST_CXX="${HOST_CXX:-clang++}"
 JOBS="${JOBS:-$(nproc)}"
@@ -84,12 +100,26 @@ echo "platform:    $PLATFORM_JAR"
 mkdir -p "$OUT"
 LIBS="$OUT/lib/arm64-v8a"
 
+GENERATED="$ROOT/generated/default"
+STUB_MARKER="$GENERATED/burstlimit_stub_funcs.cpp"
+
 if [ "$APK_ONLY" -eq 0 ]; then
   # --- Game executable --------------------------------------------------------
   XEX="$ROOT/game_data_root/default.xex"
-  [ -f "$XEX" ] || die "game_data_root/default.xex not found: the recompiler translates the game code
+  if [ "$COMPILE_CHECK" -eq 1 ]; then
+    if [ -d "$GENERATED" ] && [ ! -f "$STUB_MARKER" ]; then
+      die "generated/default holds recompiled game code; --compile-check would replace it with the
+stand-in. Move it away first, or build normally."
+    fi
+  else
+    [ -f "$XEX" ] || die "game_data_root/default.xex not found: the recompiler translates the game code
 from it at build time (the APK itself asks for the ISO on the phone). See README-android.md."
-  if command -v sha1sum >/dev/null; then
+    # Left over from a --compile-check: the real codegen starts from scratch.
+    if [ -f "$STUB_MARKER" ]; then
+      rm -rf "$GENERATED"
+    fi
+  fi
+  if [ "$COMPILE_CHECK" -eq 0 ] && command -v sha1sum >/dev/null; then
     sha="$(sha1sum "$XEX" | cut -d' ' -f1)"
     [ "$sha" = "aec598f88cf51181fc377b148e0b1ad30db4485c" ] ||
       echo "warning: default.xex SHA-1 $sha is not the US version this project targets"
@@ -118,12 +148,18 @@ git -C thirdparty/rexglue-sdk clean -fd src include, then run this again."
     cmake -S "$SDK_SRC" -B "$HOST_BUILD" -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_C_COMPILER="$HOST_CC" -DCMAKE_CXX_COMPILER="$HOST_CXX" \
-      "${host_flags[@]}" -DREXGLUE_ENABLE_TRACY=OFF >/dev/null
+      "${host_flags[@]}" "${LAUNCHER_ARGS[@]}" -DREXGLUE_ENABLE_TRACY=OFF >/dev/null
     cmake --build "$HOST_BUILD" --target rexglue -j "$JOBS"
     HOST_REXGLUE="$(find "$SDK_SRC/out" -path '*linux-*' -name rexglue -type f -perm -u+x | head -1)"
   fi
   [ -x "$HOST_REXGLUE" ] || die "host rexglue not found: $HOST_REXGLUE"
   echo "rexglue: $HOST_REXGLUE"
+  CODEGEN="$HOST_REXGLUE"
+  if [ "$COMPILE_CHECK" -eq 1 ]; then
+    log "Compile check: stand-in for the game code (the APK will not run the game)"
+    python3 "$ROOT/scripts/android_stub_codegen.py" "$ROOT"
+    CODEGEN="$(type -P true)"
+  fi
 
   # --- Native libraries ------------------------------------------------------
   log "Building the native libraries (arm64-v8a, API $API_LEVEL)"
@@ -134,7 +170,8 @@ git -C thirdparty/rexglue-sdk clean -fd src include, then run this again."
     -DCMAKE_BUILD_TYPE=Release
     -DREXGLUE_ENABLE_TRACY=OFF
     -DREXGLUE_RECOMP_DEBUG_INFO=none
-    -DREXGLUE_CODEGEN_EXECUTABLE="$HOST_REXGLUE"
+    -DREXGLUE_CODEGEN_EXECUTABLE="$CODEGEN"
+    "${LAUNCHER_ARGS[@]}"
   )
   if [ -n "${BURSTLIMIT_VERSION_OVERRIDE:-}" ]; then
     cmake_args+=(-DBURSTLIMIT_VERSION_OVERRIDE="$BURSTLIMIT_VERSION_OVERRIDE")

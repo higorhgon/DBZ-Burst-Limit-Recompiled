@@ -123,8 +123,61 @@ side). Signing: without `APK_KEYSTORE` the script makes `out/android/burstlimit.
 reuses it. Keep it: Android only installs an update over an existing install when both are signed with the
 same key. Other options are listed at the top of the script.
 
+`scripts/build_android.sh --compile-check` builds everything without `default.xex`, with a stand-in for the game
+code (what CI runs without the game): the APK it makes does not run the game.
+
 `android/` is also a normal Gradle project (Android Studio) for the Java side; it takes the native libraries from
 the folder given with `-PnativeLibsDir=` (the script stages them in `out/android/lib`).
+
+### GitHub Actions
+
+Two workflows build the APK on GitHub (both use `.github/workflows/android-build.yml`):
+
+| Workflow | When | Result |
+|---|---|---|
+| **Android** (`android.yml`) | Every push (any branch, not README-only changes), and pull requests from forks | The APK as an **artifact** of the run (kept 14 days) |
+| **Android release** (`android-release.yml`) | By hand: Actions > Android release > Run workflow, with a tag (e.g. `v0.4.0-android.1`) | A GitHub **release** with the APK and its SHA-256 |
+
+The recompiler needs `default.xex`, which never goes in the repository. The workflows download it from a
+private place given in the secrets below (Settings > Secrets and variables > Actions > New repository secret).
+Without `GAME_XEX_URL` (forks, pull requests from forks, or before you set it), the commit build runs
+`scripts/build_android.sh --compile-check` instead: everything is compiled and packaged with a stand-in for the
+game code, which checks the commit, but no APK is published. A release always needs the real build.
+
+| Secret | Needed for | Value |
+|---|---|---|
+| `GAME_XEX_URL` | playable APKs, releases | Direct download URL of your `default.xex` (US). Checked against the SHA-1 above. |
+| `GAME_XEX_AUTH_HEADER` | when the URL needs a login | One HTTP header, e.g. `Authorization: Bearer <token>` |
+| `APK_KEYSTORE_BASE64` | releases (optional for commit builds) | The signing key, base64-encoded |
+| `APK_KEYSTORE_PASS` | with the key | Its password |
+| `APK_KEY_ALIAS` | with the key | Its alias |
+
+**Hosting `default.xex` privately**: one way is a release asset in a **private** repository of your own:
+
+1. Create a private repository (e.g. `burstlimit-private`), make a release in it, and attach `default.xex`.
+2. Get the asset's API URL:
+   `gh api repos/<you>/burstlimit-private/releases/latest --jq '.assets[] | "\(.url) \(.name)"'`
+   (`https://api.github.com/repos/<you>/burstlimit-private/releases/assets/<id>`). That is `GAME_XEX_URL`.
+3. Make a fine-grained personal access token with read access to **Contents** of that repository only, and set
+   `GAME_XEX_AUTH_HEADER` to `Authorization: Bearer <token>`.
+
+Anyone who has the URL and the header can download the file, so keep both in secrets only.
+
+**Signing key** (make it once and keep a backup: Android installs an update only when it is signed with the same
+key as the installed app):
+
+```sh
+keytool -genkeypair -keystore burstlimit-release.keystore -alias burstlimit \
+  -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=DBZ Burst Limit Recompiled"
+base64 -w0 burstlimit-release.keystore   # -> APK_KEYSTORE_BASE64
+```
+
+Without the key, commit builds are signed with a throwaway key: they install fine, but not over a release install
+(uninstall first, which deletes the extracted game files and saves of the app). The version code is the commit
+count of the branch, so a newer build always installs over an older one with the same key.
+
+> The APK holds the recompiled game code (no game data). The run artifacts of a public repository can be downloaded
+> by any signed-in GitHub user, and releases by everyone, as with the PC builds' releases.
 
 ---
 

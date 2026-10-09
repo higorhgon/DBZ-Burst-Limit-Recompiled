@@ -1,0 +1,91 @@
+# Builds the Android APK and publishes it as a GitHub release (run it from the
+# Actions tab: Android release > Run workflow).
+#
+# Needs the GAME_XEX_URL secret (the recompiler reads default.xex) and the
+# signing key secrets (APK_KEYSTORE_BASE64, APK_KEYSTORE_PASS, APK_KEY_ALIAS):
+# every release must be signed with the same key, or Android won't install it
+# over the previous one. See README-android.md.
+
+name: Android release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (e.g. v0.4.0-android.1)
+        required: true
+        type: string
+      title:
+        description: Release title (empty = the tag)
+        required: false
+        type: string
+      notes:
+        description: Release notes (empty = generated from the commits)
+        required: false
+        type: string
+      prerelease:
+        description: Mark as a pre-release
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check the tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+(\.[0-9]+)*([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag '$TAG' should look like v0.4.0-android.1"
+            exit 1
+          fi
+
+  build:
+    needs: check
+    uses: ./.github/workflows/android-build.yml
+    secrets: inherit
+    with:
+      version-name: ${{ inputs.tag }}
+      release: true
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download the APK
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: dist
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          TITLE: ${{ inputs.title }}
+          NOTES: ${{ inputs.notes }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          apk="dist/DBZ-Burst-Limit-Recompiled-$TAG.apk"
+          mv dist/DBZ-Burst-Limit-Recompiled-android.apk "$apk"
+          sha256sum "$apk" | tee "$apk.sha256"
+          args=(--repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "${TITLE:-$TAG}")
+          if [ -n "$NOTES" ]; then
+            args+=(--notes "$NOTES")
+          else
+            args+=(--generate-notes)
+          fi
+          if [ "$PRERELEASE" = "true" ]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$TAG" "${args[@]}" "$apk" "$apk.sha256"
