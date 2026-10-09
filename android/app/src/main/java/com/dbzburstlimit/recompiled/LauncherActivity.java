@@ -212,7 +212,7 @@ public class LauncherActivity extends Activity {
             File log = new File(GameFiles.userDir(this), "burstlimit.log");
             String content;
             try {
-                content = tail(log, 48 * 1024);
+                content = tail(log, 160 * 1024);
             } catch (IOException e) {
                 content = "";
             }
@@ -221,7 +221,7 @@ public class LauncherActivity extends Activity {
             }
             // This app's own logcat (the game process shares its uid): SDL,
             // Vulkan driver and native crash messages that never reach the file.
-            String logcat = readLogcat(16 * 1024);
+            String logcat = readLogcat(24 * 1024);
             String text = content + (logcat.isEmpty() ? "" : "\n--- logcat ---\n" + logcat);
             ui.post(() -> showLogDialog(text));
         }, "read-log").start();
@@ -229,7 +229,10 @@ public class LauncherActivity extends Activity {
 
     private static String readLogcat(int maxChars) {
         try {
-            Process process = new ProcessBuilder("logcat", "-d", "-v", "time", "-t", "3000")
+            // Warnings and errors from everything (Vulkan driver, crashes), SDL's
+            // own messages; the runtime's lines are in the file already.
+            Process process = new ProcessBuilder("logcat", "-d", "-v", "time", "-t", "20000",
+                    "rexglue:S", "SDL:I", "*:W")
                 .redirectErrorStream(true).start();
             java.io.ByteArrayOutputStream data = new java.io.ByteArrayOutputStream();
             try (java.io.InputStream in = process.getInputStream()) {
