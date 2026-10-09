@@ -117,10 +117,10 @@ index 352af67..e821078 100644
    std::vector<uint8_t> stack_;
 diff --git a/include/rex/ui/surface_android.h b/include/rex/ui/surface_android.h
 new file mode 100644
-index 0000000..01da1a5
+index 0000000..8772c56
 --- /dev/null
 +++ b/include/rex/ui/surface_android.h
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,38 @@
 +#pragma once
 +/**
 + ******************************************************************************
@@ -142,7 +142,11 @@ index 0000000..01da1a5
 +
 +class AndroidNativeWindowSurface final : public Surface {
 + public:
-+  explicit AndroidNativeWindowSurface(ANativeWindow* window) : window_(window) {}
++  // Holds a reference: SDL releases its own when the SurfaceView drops the
++  // surface, and the presenter may still ask for the size until it moves to
++  // the new one.
++  explicit AndroidNativeWindowSurface(ANativeWindow* window);
++  ~AndroidNativeWindowSurface() override;
 +  TypeIndex GetType() const override { return kTypeIndex_AndroidNativeWindow; }
 +  ANativeWindow* window() const { return window_; }
 +
@@ -743,10 +747,10 @@ index 4a433fb..87a4902 100644
    user_data_root_ = path_config.user_data_root;
 diff --git a/src/ui/surface_android.cpp b/src/ui/surface_android.cpp
 new file mode 100644
-index 0000000..ec34780
+index 0000000..e8ecf4e
 --- /dev/null
 +++ b/src/ui/surface_android.cpp
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,46 @@
 +/**
 + ******************************************************************************
 + * Xenia : Xbox 360 Emulator Research Project                                 *
@@ -764,6 +768,18 @@ index 0000000..ec34780
 +
 +namespace rex {
 +namespace ui {
++
++AndroidNativeWindowSurface::AndroidNativeWindowSurface(ANativeWindow* window) : window_(window) {
++  if (window_) {
++    ANativeWindow_acquire(window_);
++  }
++}
++
++AndroidNativeWindowSurface::~AndroidNativeWindowSurface() {
++  if (window_) {
++    ANativeWindow_release(window_);
++  }
++}
 +
 +bool AndroidNativeWindowSurface::GetSizeImpl(uint32_t& width_out, uint32_t& height_out) const {
 +  if (!window_) {
