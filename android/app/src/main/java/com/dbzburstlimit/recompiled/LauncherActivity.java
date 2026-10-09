@@ -71,58 +71,69 @@ public class LauncherActivity extends Activity {
     }
 
     private View buildLayout() {
-        int pad = dp(16);
         LinearLayout column = new LinearLayout(this);
         column.setOrientation(LinearLayout.VERTICAL);
-        column.setPadding(pad, pad, pad, pad);
-        column.setGravity(Gravity.CENTER_HORIZONTAL);
+        column.setPadding(dp(20), dp(12), dp(20), dp(24));
 
         ImageView logo = new ImageView(this);
         logo.setImageResource(R.drawable.logo);
         logo.setAdjustViewBounds(true);
-        logo.setMaxHeight(dp(140));
-        column.addView(logo);
+        logo.setMaxHeight(dp(120));
+        LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(-2, -2);
+        logoParams.gravity = Gravity.CENTER_HORIZONTAL;
+        column.addView(logo, logoParams);
 
-        TextView subtitle = text(getString(R.string.subtitle), 14);
+        TextView subtitle = text(getString(R.string.subtitle), 13);
         subtitle.setGravity(Gravity.CENTER);
-        column.addView(subtitle);
+        subtitle.setAlpha(0.7f);
+        column.addView(subtitle, margins(-1, dp(8)));
 
+        // Game files: status, Play, and where they come from.
+        LinearLayout game = card();
         statusText = text(getString(R.string.status_checking), 16);
         statusText.setGravity(Gravity.CENTER);
-        statusText.setPadding(0, dp(12), 0, dp(12));
-        column.addView(statusText);
+        game.addView(statusText);
 
         playButton = button(getString(R.string.play), v -> play());
         playButton.setTextSize(20);
-        column.addView(playButton);
+        playButton.setMinHeight(dp(56));
+        game.addView(playButton, margins(-1, dp(16)));
 
         LinearLayout pickRow = new LinearLayout(this);
         pickRow.setOrientation(LinearLayout.HORIZONTAL);
         isoButton = button(getString(R.string.pick_iso), v -> pickIso());
         folderButton = button(getString(R.string.pick_folder), v -> pickFolder());
-        pickRow.addView(isoButton, new LinearLayout.LayoutParams(0, -2, 1));
-        pickRow.addView(folderButton, new LinearLayout.LayoutParams(0, -2, 1));
-        column.addView(pickRow);
+        LinearLayout.LayoutParams left = new LinearLayout.LayoutParams(0, -2, 1);
+        left.setMarginEnd(dp(6));
+        LinearLayout.LayoutParams right = new LinearLayout.LayoutParams(0, -2, 1);
+        right.setMarginStart(dp(6));
+        pickRow.addView(isoButton, left);
+        pickRow.addView(folderButton, right);
+        game.addView(pickRow, margins(-1, dp(10)));
 
         progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progressBar.setMax(1000);
         progressBar.setVisibility(View.GONE);
-        column.addView(progressBar, new LinearLayout.LayoutParams(-1, -2));
+        game.addView(progressBar, margins(-1, dp(16)));
         progressText = text("", 13);
         progressText.setVisibility(View.GONE);
-        column.addView(progressText);
+        game.addView(progressText, margins(-1, dp(6)));
         cancelButton = button(getString(R.string.cancel), v -> cancel.set(true));
         cancelButton.setVisibility(View.GONE);
-        column.addView(cancelButton);
+        game.addView(cancelButton, margins(-1, dp(8)));
+        column.addView(game, margins(-1, dp(20)));
 
+        // On-screen controller.
+        LinearLayout controls = card();
+        controls.addView(heading(getString(R.string.section_controls)));
         CheckBox touch = new CheckBox(this);
         touch.setText(R.string.touch_controls);
         touch.setChecked(prefs.getBoolean(PREF_TOUCH_CONTROLS, true));
         touch.setOnCheckedChangeListener(
             (b, checked) -> prefs.edit().putBoolean(PREF_TOUCH_CONTROLS, checked).apply());
-        column.addView(touch);
+        controls.addView(touch, margins(-1, dp(8)));
 
-        column.addView(text(getString(R.string.touch_opacity), 14));
+        controls.addView(text(getString(R.string.touch_opacity), 14), margins(-1, dp(14)));
         SeekBar opacity = new SeekBar(this);
         opacity.setMax(100);
         opacity.setProgress(prefs.getInt(PREF_TOUCH_OPACITY, 55));
@@ -138,17 +149,18 @@ public class LauncherActivity extends Activity {
             @Override
             public void onStopTrackingTouch(SeekBar s) {}
         });
-        column.addView(opacity, new LinearLayout.LayoutParams(-1, -2));
+        controls.addView(opacity, margins(-1, dp(6)));
+        column.addView(controls, margins(-1, dp(16)));
 
-        column.addView(text(getString(R.string.extra_args), 14));
+        // Advanced: extra settings as command-line options.
+        LinearLayout advanced = card();
+        advanced.addView(heading(getString(R.string.section_advanced)));
+        TextView extraLabel = text(getString(R.string.extra_args), 13);
+        extraLabel.setAlpha(0.7f);
+        advanced.addView(extraLabel, margins(-1, dp(8)));
         EditText extraArgs = new EditText(this);
         extraArgs.setSingleLine(true);
         extraArgs.setText(prefs.getString(PREF_EXTRA_ARGS, ""));
-        extraArgs.setOnFocusChangeListener((v, hasFocus) -> {
-            if (!hasFocus) {
-                prefs.edit().putString(PREF_EXTRA_ARGS, extraArgs.getText().toString()).apply();
-            }
-        });
         extraArgs.addTextChangedListener(new android.text.TextWatcher() {
             @Override
             public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
@@ -161,24 +173,150 @@ public class LauncherActivity extends Activity {
                 prefs.edit().putString(PREF_EXTRA_ARGS, s.toString()).apply();
             }
         });
-        column.addView(extraArgs, new LinearLayout.LayoutParams(-1, -2));
+        advanced.addView(extraArgs, margins(-1, dp(4)));
+        column.addView(advanced, margins(-1, dp(16)));
 
+        // Files and the log.
+        LinearLayout files = card();
+        files.addView(heading(getString(R.string.section_files)));
         TextView storage = text(getString(R.string.storage_info,
             GameFiles.gameDir(this).getAbsolutePath(),
             GameFiles.userDir(this).getAbsolutePath()), 12);
-        storage.setPadding(0, dp(12), 0, 0);
+        storage.setAlpha(0.7f);
         storage.setTextIsSelectable(true);
-        column.addView(storage);
-
+        files.addView(storage, margins(-1, dp(8)));
+        files.addView(button(getString(R.string.view_log), v -> showLog()), margins(-1, dp(12)));
         if (!hasVulkan11()) {
             TextView warning = text(getString(R.string.no_vulkan), 13);
             warning.setTextColor(Color.rgb(255, 170, 60));
-            column.addView(warning);
+            files.addView(warning, margins(-1, dp(12)));
         }
+        column.addView(files, margins(-1, dp(16)));
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(column);
+        // Android 15 draws the app under the status and navigation bars:
+        // keep the content clear of them.
+        scroll.setOnApplyWindowInsetsListener((v, insets) -> {
+            android.graphics.Insets bars = insets.getInsets(
+                android.view.WindowInsets.Type.systemBars() | android.view.WindowInsets.Type.displayCutout());
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            return android.view.WindowInsets.CONSUMED;
+        });
         return scroll;
+    }
+
+    /** The end of burstlimit.log, to read, copy or share (Android/data isn't reachable from most file managers). */
+    private void showLog() {
+        new Thread(() -> {
+            File log = new File(GameFiles.userDir(this), "burstlimit.log");
+            String content;
+            try {
+                content = tail(log, 48 * 1024);
+            } catch (IOException e) {
+                content = "";
+            }
+            if (content.isEmpty()) {
+                content = getString(R.string.log_empty, log.getAbsolutePath()) + "\n";
+            }
+            // This app's own logcat (the game process shares its uid): SDL,
+            // Vulkan driver and native crash messages that never reach the file.
+            String logcat = readLogcat(16 * 1024);
+            String text = content + (logcat.isEmpty() ? "" : "\n--- logcat ---\n" + logcat);
+            ui.post(() -> showLogDialog(text));
+        }, "read-log").start();
+    }
+
+    private static String readLogcat(int maxChars) {
+        try {
+            Process process = new ProcessBuilder("logcat", "-d", "-v", "time", "-t", "3000")
+                .redirectErrorStream(true).start();
+            java.io.ByteArrayOutputStream data = new java.io.ByteArrayOutputStream();
+            try (java.io.InputStream in = process.getInputStream()) {
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = in.read(buffer)) > 0) {
+                    data.write(buffer, 0, read);
+                }
+            }
+            process.waitFor();
+            String text = data.toString("UTF-8");
+            return text.length() > maxChars ? text.substring(text.length() - maxChars) : text;
+        } catch (IOException | InterruptedException e) {
+            return "";
+        }
+    }
+
+    private void showLogDialog(String logText) {
+
+        TextView view = text(logText, 11);
+        view.setTypeface(android.graphics.Typeface.MONOSPACE);
+        view.setTextIsSelectable(true);
+        view.setPadding(dp(16), dp(8), dp(16), dp(8));
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(view);
+        scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
+
+        new AlertDialog.Builder(this)
+            .setTitle(R.string.view_log)
+            .setView(scroll)
+            .setPositiveButton(R.string.copy, (d, w) -> {
+                android.content.ClipboardManager clipboard =
+                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("burstlimit.log", logText));
+                android.widget.Toast.makeText(this, R.string.log_copied, android.widget.Toast.LENGTH_SHORT).show();
+            })
+            .setNeutralButton(R.string.share, (d, w) -> {
+                Intent send = new Intent(Intent.ACTION_SEND);
+                send.setType("text/plain");
+                send.putExtra(Intent.EXTRA_SUBJECT, "burstlimit.log");
+                send.putExtra(Intent.EXTRA_TEXT, logText);
+                startActivity(Intent.createChooser(send, getString(R.string.share)));
+            })
+            .setNegativeButton(R.string.close, null)
+            .show();
+    }
+
+    private static String tail(File file, int maxBytes) throws IOException {
+        if (!file.isFile()) {
+            return "";
+        }
+        try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(file, "r")) {
+            long length = in.length();
+            long start = Math.max(0, length - maxBytes);
+            byte[] data = new byte[(int) (length - start)];
+            in.seek(start);
+            in.readFully(data);
+            String text = new String(data, java.nio.charset.StandardCharsets.UTF_8);
+            if (start > 0) {
+                int newline = text.indexOf('\n');
+                text = newline >= 0 ? text.substring(newline + 1) : text;
+            }
+            return text;
+        }
+    }
+
+    private LinearLayout card() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(16), dp(16), dp(16), dp(16));
+        android.graphics.drawable.GradientDrawable background = new android.graphics.drawable.GradientDrawable();
+        background.setColor(Color.argb(20, 255, 255, 255));
+        background.setCornerRadius(dp(16));
+        card.setBackground(background);
+        return card;
+    }
+
+    private TextView heading(String value) {
+        TextView view = text(value, 16);
+        view.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        return view;
+    }
+
+    private LinearLayout.LayoutParams margins(int width, int top) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(width, -2);
+        params.topMargin = top;
+        return params;
     }
 
     private void refreshStatus() {

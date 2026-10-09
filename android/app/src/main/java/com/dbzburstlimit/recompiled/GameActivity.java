@@ -1,6 +1,7 @@
 package com.dbzburstlimit.recompiled;
 
 import android.content.SharedPreferences;
+import android.content.pm.ActivityInfo;
 import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
@@ -53,6 +54,9 @@ public class GameActivity extends SDLActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        // Landscape before SDL makes its window, so the game starts with a
+        // landscape surface.
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         super.onCreate(savedInstanceState);
         if (mBrokenLibraries || mLayout == null) {
             return;  // SDL already shows its error dialog.
@@ -81,6 +85,13 @@ public class GameActivity extends SDLActivity {
             touchController.stopWatchingControllers();
         }
         super.onPause();
+    }
+
+    // SDL asks for an orientation from the window size and its hint (portrait
+    // when the window starts out taller than wide): the game is landscape only.
+    @Override
+    public void setOrientationBis(int w, int h, boolean resizable, String hint) {
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
     }
 
     @Override

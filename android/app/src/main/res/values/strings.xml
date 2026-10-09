@@ -33,4 +33,13 @@
     <string name="yes">Yes</string>
     <string name="no">No</string>
     <string name="no_vulkan">This device doesn\'t report Vulkan 1.1, which the renderer needs. The game will probably not start.</string>
+    <string name="section_controls">On-screen controller</string>
+    <string name="section_advanced">Advanced</string>
+    <string name="section_files">Files and log</string>
+    <string name="view_log">View log</string>
+    <string name="copy">Copy</string>
+    <string name="share">Share</string>
+    <string name="close">Close</string>
+    <string name="log_empty">No game log yet (%1$s).</string>
+    <string name="log_copied">Log copied</string>
 </resources>

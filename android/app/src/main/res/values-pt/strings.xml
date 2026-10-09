@@ -31,4 +31,13 @@
     <string name="yes">Sim</string>
     <string name="no">Não</string>
     <string name="no_vulkan">Este aparelho não informa suporte a Vulkan 1.1, que o renderizador precisa. O jogo provavelmente não vai iniciar.</string>
+    <string name="section_controls">Controle na tela</string>
+    <string name="section_advanced">Avançado</string>
+    <string name="section_files">Arquivos e log</string>
+    <string name="view_log">Ver log</string>
+    <string name="copy">Copiar</string>
+    <string name="share">Compartilhar</string>
+    <string name="close">Fechar</string>
+    <string name="log_empty">Ainda não há log do jogo (%1$s).</string>
+    <string name="log_copied">Log copiado</string>
 </resources>
