@@ -819,10 +819,10 @@ index 77bb1dc..a66e5ca 100644
  
  int main(int argc, char* argv[]) {
 diff --git a/thirdparty/CMakeLists.txt b/thirdparty/CMakeLists.txt
-index b148128..110099b 100644
+index b148128..e674067 100644
 --- a/thirdparty/CMakeLists.txt
 +++ b/thirdparty/CMakeLists.txt
-@@ -321,8 +321,23 @@ set(SDL_DUMMYAUDIO OFF CACHE BOOL "" FORCE)
+@@ -321,8 +321,27 @@ set(SDL_DUMMYAUDIO OFF CACHE BOOL "" FORCE)
  set(SDL_DUMMYVIDEO OFF CACHE BOOL "" FORCE)
  
  # Linux video and audio backends. Both video drivers are always built so the
@@ -841,9 +841,13 @@ index b148128..110099b 100644
 +    set(SDL_FILESYSTEM  ON  CACHE BOOL "" FORCE)
 +    # A native build in Termux can find its X11 / PulseAudio packages: the
 +    # app only uses Android's own drivers.
-+    foreach(_sdl_desktop_option X11 WAYLAND ALSA PULSEAUDIO PIPEWIRE JACK SNDIO KMSDRM OFFSCREEN)
++    foreach(_sdl_desktop_option X11 WAYLAND ALSA PULSEAUDIO PIPEWIRE JACK SNDIO KMSDRM OFFSCREEN
++                                HIDAPI_LIBUSB LIBUDEV)
 +        set(SDL_${_sdl_desktop_option} OFF CACHE BOOL "" FORCE)
 +    endforeach()
++    # SDL's own iconv: bionic only has one from API 28, so below that (Termux
++    # builds for 24) SDL would take Termux's libiconv.so, which Android lacks.
++    set(SDL_SYSTEM_ICONV OFF CACHE BOOL "" FORCE)
 +elseif(UNIX AND NOT APPLE)
      set(SDL_X11               ON  CACHE BOOL "" FORCE)
      set(SDL_WAYLAND           ON  CACHE BOOL "" FORCE)

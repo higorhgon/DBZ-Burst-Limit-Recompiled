@@ -125,18 +125,9 @@ from it at build time (the APK itself asks for the ISO on the phone). See README
       echo "warning: default.xex SHA-1 $sha is not the US version this project targets"
   fi
 
-  # --- SDK Android patch ------------------------------------------------------
-  PATCH="$ROOT/android/patches/rexglue-sdk-android.patch"
-  [ -f "$SDK_SRC/CMakeLists.txt" ] || die "SDK submodule missing: git submodule update --init --recursive"
-  if git -C "$SDK_SRC" apply --reverse --check "$PATCH" 2>/dev/null; then
-    echo "SDK Android patch: already applied"
-  else
-    log "Applying the SDK Android patch"
-    git -C "$SDK_SRC" apply --whitespace=nowarn "$PATCH" ||
-      die "the SDK Android patch doesn't apply. The SDK submodule is at another commit, or holds
-other changes (an older version of the patch?). To start over: git -C thirdparty/rexglue-sdk checkout . &&
-git -C thirdparty/rexglue-sdk clean -fd src include, then run this again."
-  fi
+  # --- SDK Android patch --------------------------------------------------------
+  log "SDK Android patch"
+  "$ROOT/scripts/apply_sdk_patch.sh"
 
   # --- Codegen tool for the build machine ------------------------------------
   if [ -z "${HOST_REXGLUE:-}" ]; then
