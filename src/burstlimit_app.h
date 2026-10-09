@@ -5,7 +5,11 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <rex/platform.h>
+#if REX_PLATFORM_WIN32
 #include <windows.h>
+#endif
 
 #include <rex/cvar.h>
 #include <rex/rex_app.h>
@@ -316,6 +320,11 @@ class BurstlimitApp : public rex::ReXApp {
   // Portable build: always load game files beside burstlimit.exe.
   // This intentionally ignores stale game_data_root values from old configs.
   void OnConfigurePaths(rex::PathConfig& paths) override {
+#if !REX_PLATFORM_WIN32
+    // Android (and other non-Windows builds) get --game_data_root from the
+    // launcher; there is no folder beside an exe to look in.
+    (void)paths;
+#else
     wchar_t exe_path[MAX_PATH] = {};
     const DWORD length = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
 
@@ -332,6 +341,7 @@ class BurstlimitApp : public rex::ReXApp {
         std::filesystem::exists(local_game_root / L"default.xex")) {
       paths.game_data_root = local_game_root;
     }
+#endif
   }
 
  private:

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DBZ Burst Limit</string>
+    <string name="title">Dragon Ball Z: Burst Limit Recompiled</string>
+    <string name="subtitle">Android port (experimental). Needs your own copy of the game, US (NTSC-U) version.</string>
+    <string name="status_checking">Checking the game files…</string>
+    <string name="status_missing">No game files yet. Pick your Xbox 360 disc image (ISO) or a folder you already extracted.</string>
+    <string name="status_incomplete">The game folder is incomplete (LONG2DATA files missing). Pick the ISO or folder again.</string>
+    <string name="status_wrong_version">This default.xex is not the US (NTSC-U) version. Only the US version works: the game code was recompiled from it.</string>
+    <string name="status_ok">Game files OK (US version).</string>
+    <string name="pick_iso">Select ISO (Xbox 360)</string>
+    <string name="pick_folder">Select extracted folder</string>
+    <string name="play">Play</string>
+    <string name="cancel">Cancel</string>
+    <string name="touch_controls">On-screen controller (hidden while a physical controller is connected)</string>
+    <string name="touch_opacity">On-screen controller opacity</string>
+    <string name="extra_args">Extra settings (e.g. --frame_rate=60 --draw_resolution_scale_x=1)</string>
+    <string name="storage_info">Game files: %1$s\nSettings, saves and logs: %2$s</string>
+    <string name="reading_iso">Reading the disc image…</string>
+    <string name="reading_folder">Reading the folder…</string>
+    <string name="checking_xex">Checking default.xex…</string>
+    <string name="extracting">Extracting: %1$s / %2$s\n%3$s</string>
+    <string name="copying">Copying: %1$s / %2$s\n%3$s</string>
+    <string name="not_xbox_image">This file is not an Xbox 360 disc image (no XDVDFS game partition found).</string>
+    <string name="no_xex_in_image">The disc image has no default.xex.</string>
+    <string name="no_xex_in_folder">The folder has no default.xex at its top. Pick the folder that contains default.xex and LONG2DATA.</string>
+    <string name="not_enough_space">Not enough free space: %1$s needed, %2$s free.</string>
+    <string name="cancelled">Cancelled.</string>
+    <string name="error">Error: %1$s</string>
+    <string name="done">Done. Game files are ready.</string>
+    <string name="replace_title">Replace the game files?</string>
+    <string name="replace_message">The current game files will be deleted first.</string>
+    <string name="yes">Yes</string>
+    <string name="no">No</string>
+    <string name="no_vulkan">This device doesn\'t report Vulkan 1.1, which the renderer needs. The game will probably not start.</string>
+</resources>

@@ -108,6 +108,16 @@ macro(rexglue_setup_target target_name)
     rexglue_configure_target(${target_name} ${ARGN})
 endmacro()
 
+# Cross builds (Android) can't run the target's own rexglue: point
+# REXGLUE_CODEGEN_EXECUTABLE at one built for the build machine.
+set(REXGLUE_CODEGEN_EXECUTABLE "" CACHE FILEPATH
+    "rexglue built for the build machine (cross builds); empty = the SDK's own")
+if(REXGLUE_CODEGEN_EXECUTABLE)
+    set(_rexglue_codegen_command "${REXGLUE_CODEGEN_EXECUTABLE}")
+else()
+    set(_rexglue_codegen_command $<TARGET_FILE:rex::rexglue>)
+endif()
+
 # Codegen runs as part of the build, re-running only when an input in codegen.d
 # changes. Build it alone with 'cmake --build . --target burstlimit_codegen'.
 # Listing the sources as outputs orders any target that compiles them after
@@ -117,7 +127,7 @@ endmacro()
 add_custom_command(
     OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/generated/default/codegen.build.stamp"
            ${REXGLUE_ENTRYPOINT_GENERATED_SOURCES}
-    COMMAND $<TARGET_FILE:rex::rexglue> codegen ${CMAKE_CURRENT_SOURCE_DIR}/burstlimit_manifest.toml
+    COMMAND ${_rexglue_codegen_command} codegen ${CMAKE_CURRENT_SOURCE_DIR}/burstlimit_manifest.toml
     DEPFILE "${CMAKE_CURRENT_SOURCE_DIR}/generated/default/codegen.d"
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Generating recompiled code for burstlimit"

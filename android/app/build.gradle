@@ -1,0 +1,77 @@
+plugins {
+    id 'com.android.application'
+}
+
+// The native libraries (libmain.so, librexruntime.so, librexgpu-xenos.so,
+// libc++_shared.so) are built by scripts/build_android.sh, which passes
+// -PnativeLibsDir=<folder holding arm64-v8a/>.
+def nativeLibsDir = project.findProperty('nativeLibsDir') ?: "${buildDir}/native-libs"
+def sdlJavaDir = "${rootDir}/../thirdparty/rexglue-sdk/thirdparty/sdl3/android-project/app/src/main/java"
+def appVersionName = project.findProperty('appVersionName') ?: '0.4.0-android'
+
+android {
+    namespace 'com.dbzburstlimit.recompiled'
+    compileSdk 35
+    buildToolsVersion '35.0.0'
+
+    defaultConfig {
+        applicationId 'com.dbzburstlimit.recompiled'
+        // ASharedMemory (26) and AAudio (26); 29 for scoped storage behaviour.
+        minSdk 29
+        targetSdk 35
+        versionCode 1
+        versionName appVersionName
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    sourceSets {
+        main {
+            // SDL's Java side, from the same SDL3 the runtime is built with.
+            java.srcDirs += [sdlJavaDir]
+            jniLibs.srcDirs = [nativeLibsDir]
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // Extracted to nativeLibraryDir: the runtime loads the GPU plugin
+            // from there by path.
+            useLegacyPackaging = true
+            keepDebugSymbols += ['**/*.so']
+        }
+    }
+
+    signingConfigs {
+        release {
+            def ks = project.findProperty('releaseStoreFile')
+            if (ks) {
+                storeFile file(ks)
+                storePassword project.findProperty('releaseStorePassword')
+                keyAlias project.findProperty('releaseKeyAlias')
+                keyPassword project.findProperty('releaseKeyPassword')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            // Without a release keystore, sign with the debug key so the APK
+            // installs right away.
+            signingConfig project.findProperty('releaseStoreFile') ?
+                signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}

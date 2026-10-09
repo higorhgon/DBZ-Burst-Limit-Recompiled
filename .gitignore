@@ -2,6 +2,15 @@
 /out/
 /build/
 
+# Android (Gradle / Android Studio)
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/local.properties
+/android/.idea/
+*.keystore
+*.jks
+
 # Recompiled code is generated from the game executable during the build.
 /generated/default/
 

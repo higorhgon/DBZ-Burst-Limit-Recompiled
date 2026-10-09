@@ -41,6 +41,11 @@ if(WIN32)
     enable_language(RC)
     list(APPEND BURSTLIMIT_SOURCES res/burstlimit.rc)
     add_executable(burstlimit WIN32 ${BURSTLIMIT_SOURCES})
+elseif(ANDROID)
+    # SDLActivity loads libmain.so and calls its SDL_main (android/).
+    list(APPEND BURSTLIMIT_SOURCES src/burstlimit_android.cpp)
+    add_library(burstlimit SHARED ${BURSTLIMIT_SOURCES})
+    set_target_properties(burstlimit PROPERTIES OUTPUT_NAME main)
 else()
     add_executable(burstlimit ${BURSTLIMIT_SOURCES})
 endif()
@@ -90,6 +95,10 @@ target_compile_definitions(burstlimit PRIVATE "BURSTLIMIT_VERSION=\"${_bl_versio
 
 # ReXGlue UI sources use ImGui directly.
 target_link_libraries(burstlimit PRIVATE imgui::imgui)
+if(ANDROID)
+    # burstlimit_android.cpp: the touch controller is an SDL virtual gamepad.
+    target_link_libraries(burstlimit PRIVATE SDL3::Headers)
+endif()
 target_include_directories(burstlimit PRIVATE "${CMAKE_BINARY_DIR}/rexglue-sdk/include")
 
 if(BURSTLIMIT_DISCORD)

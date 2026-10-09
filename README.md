@@ -103,6 +103,10 @@ Download `DBZ-Burst-Limit-Recompiled-*-linux.zip` instead: the same build with
 `game_data_root` and run `./run_linux.sh`. Steam / Proton works too: add `burstlimit.exe` as a non-Steam game
 and force Proton Experimental in its Compatibility settings.
 
+### Android (experimental)
+An arm64 APK with the Vulkan renderer, an on-screen controller and a first-start screen that extracts your Xbox
+360 ISO on the phone. Building it needs `default.xex` like the PC build. See [README-android.md](README-android.md).
+
 ---
 
 ## Requirements

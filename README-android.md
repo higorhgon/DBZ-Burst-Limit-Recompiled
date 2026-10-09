@@ -1,0 +1,154 @@
+# Android port (experimental)
+
+An arm64 Android build of Dragon Ball Z: Burst Limit Recompiled: the same recompiled game code and runtime as
+the PC version, with the Vulkan renderer, SDL3 for the window, audio and controllers, and an Android app around
+it that sets up the game files.
+
+> **Status: untested on a real device.** The port builds, and the parts that could be tested off-device were:
+> the PowerPC instruction test suite passes on ARM64 (1462 cases), the AArch64 fiber switch, the ISO extractor,
+> the APK packaging. Whether a given phone's Vulkan driver runs the Xenos renderer well enough is the big open
+> question. Logs and reports are welcome (see [Logs](#logs)).
+
+---
+
+## How it works
+
+The game code is translated ahead of time from the US `default.xex` into C++ and compiled for arm64, exactly like
+the PC build. So:
+
+- **Building the APK needs `default.xex`** (once, on the build machine): the recompiler reads it. Unlike
+  decompilation projects (Ship of Harkinian and other HarbourMaster ports), where the game logic is already source
+  code and the ROM only provides assets, here the game code itself comes from the `.xex`.
+- **Using the APK needs your disc image**: on the first start the app asks for the Xbox 360 **ISO** (or a folder
+  you already extracted), checks that it is the US version, and extracts the whole game partition (`default.xex`,
+  `LONG2DATA/...`) into the app's storage. The `.xex` there is what the runtime loads (its data and imports); the
+  CPK files hold the assets.
+
+The APK contains no game data.
+
+---
+
+## Requirements (to play)
+
+- Android 10 or newer, **arm64** (64-bit) device
+- **Vulkan 1.1** or newer (the app warns when the device doesn't report it)
+- Free space for the game files (about the size of the game partition of the disc, several GB)
+- Your own **US (NTSC-U)** Xbox 360 disc image (`.iso`, full redump-style image or `extract-xiso` "XISO"), or the
+  folder extracted from it
+- A controller is recommended (Bluetooth / USB, any that Android sees as a gamepad); there is an on-screen
+  controller too
+
+---
+
+## Installing and first start
+
+1. Install the APK (`adb install -r DBZ-Burst-Limit-Recompiled-android.apk`, or open it on the phone and allow
+   installing from that source).
+2. Open **DBZ Burst Limit**. Tap **Select ISO (Xbox 360)** and pick your disc image, or **Select extracted
+   folder** and pick the folder that contains `default.xex` and `LONG2DATA`.
+3. The app checks `default.xex` first (SHA-1 `aec598f88cf51181fc377b148e0b1ad30db4485c`, US version) and stops
+   right away with another version. Then it extracts or copies everything, with a progress bar. Keep the app in
+   front while it works.
+4. Tap **Play**.
+
+Where things go (no storage permission needed; reachable over USB under `Android/data`):
+
+| Path | Contents |
+|---|---|
+| `Android/data/com.dbzburstlimit.recompiled/files/game_data_root` | Game files |
+| `Android/data/com.dbzburstlimit.recompiled/files/user` | `burstlimit.toml` (settings), saves, shader cache, `burstlimit.log` |
+| `Android/data/com.dbzburstlimit.recompiled/files/textures` | Texture packs (`textures/replace`) and dumps |
+
+The launcher also has the on-screen controller switch and opacity, and an **Extra settings** field for any
+setting from the [settings table](README.md#settings) as a command-line option, for example
+`--frame_rate=60 --draw_resolution_scale_x=1 --draw_resolution_scale_y=1`.
+
+### Controls
+
+- A connected controller works as on PC: **Back + Start** opens the settings menu.
+- The **on-screen controller** (left stick, D-pad, A/B/X/Y, LB/RB, LT/RT, Back/Start) is a virtual Xbox 360 pad.
+  It hides itself while a physical controller is connected and comes back when it disconnects. Fingers can slide
+  from one button to another.
+
+### Logs
+
+`files/user/burstlimit.log` (path above), or live with `adb logcat -s rexglue SDL`. A crash report needs the
+log plus the phone model and Android version.
+
+---
+
+## Building the APK
+
+On Linux (tested on Ubuntu 24.04; Arch Linux works the same way). The build machine runs the recompiler, so the
+SDK's codegen tool is built for it first, then everything else is cross-compiled with the NDK.
+
+### What you need
+
+- `game_data_root/default.xex` from your game (US version), as for the PC build
+- CMake 3.25+, Ninja, Git, clang/clang++ **20 or newer** (for the build machine's codegen tool), a JDK 17+
+- The Android SDK command-line tools with: `platforms;android-35` (or newer), `build-tools;35.0.0` (or newer),
+  `ndk;29.0.14206865` (r28 or newer)
+- The X11 / Wayland development files SDL3 needs to configure on the build machine (codegen tool build)
+
+On Arch Linux:
+
+```sh
+sudo pacman -S --needed git cmake ninja clang lld jdk17-openjdk zip unzip \
+  libx11 libxcursor libxext libxrandr libxi libxss libxtst libxkbcommon wayland wayland-protocols \
+  libdecor alsa-lib libpulse pipewire
+# Android SDK: android-studio, or the AUR package android-sdk-cmdline-tools-latest, then:
+sdkmanager --sdk_root="$HOME/Android/Sdk" "platforms;android-35" "build-tools;35.0.0" "ndk;29.0.14206865"
+```
+
+### Build
+
+```sh
+git clone --recursive <this repository>
+cd DBZ-Burst-Limit-Recompiled
+cp /path/to/your/game/default.xex game_data_root/
+ANDROID_HOME="$HOME/Android/Sdk" scripts/build_android.sh
+```
+
+The APK is `out/android/DBZ-Burst-Limit-Recompiled-android.apk`. The script:
+
+1. Applies `android/patches/rexglue-sdk-android.patch` to `thirdparty/rexglue-sdk` (the Android support in the
+   runtime; the submodule belongs to another repository, so the changes live here as a patch).
+2. Builds `rexglue` for the build machine (`out/build/android-host`).
+3. Configures for `arm64-v8a` / API 29 with the NDK, runs codegen on `default.xex`, and builds `libmain.so`
+   (the game), `librexruntime.so` and `librexgpu-xenos.so` (`out/build/android-arm64`).
+4. Packages and signs the APK with the SDK's build tools (aapt2, d8, zipalign, apksigner), no Gradle needed.
+
+`scripts/build_android.sh --apk-only` repackages the APK from the last native build (for changes to the Java
+side). Signing: without `APK_KEYSTORE` the script makes `out/android/burstlimit.keystore` on the first build and
+reuses it. Keep it: Android only installs an update over an existing install when both are signed with the
+same key. Other options are listed at the top of the script.
+
+`android/` is also a normal Gradle project (Android Studio) for the Java side; it takes the native libraries from
+the folder given with `-PnativeLibsDir=` (the script stages them in `out/android/lib`).
+
+---
+
+## What the port changes
+
+In the runtime (the SDK patch):
+
+- Android window surface for the Vulkan presenter (`ANativeWindow` from SDL3), SDL3 set up for Android (AAudio /
+  OpenSL ES, HIDAPI, sensors), `SDL_main` entry point
+- Fibers on AArch64 without `ucontext` (bionic has none): a small assembly context switch
+- No robust mutexes (bionic), libc++ `clock_cast` fallback, Android shared memory, logs to logcat
+- A 64 KB allocation granularity on Android, so the guest's 4 KB-page physical heap works on 4 KB **and** 16 KB
+  page devices (the same 0x1000 offset Windows uses, matched in the recompiled code)
+- Paths: the GPU plugin from the app's native library folder, the config with the user data
+- POSIX fixes for the online code (socket errors), which the Linux build needs too
+
+In this repository: `src/burstlimit_android.cpp` (the on-screen controller as an SDL virtual gamepad), the
+Android library target, a cross-build option for codegen (`REXGLUE_CODEGEN_EXECUTABLE`), the Android app
+(`android/`) and `scripts/build_android.sh`.
+
+### Known limits
+
+- Performance on phones is unknown; start with the defaults (720p, 30 FPS cap) and raise them in the settings
+  menu.
+- Online play: the lobby client is Windows-only for now, so the lobby (`online_lobby_url`) is not available on
+  Android yet.
+- NVIDIA DLSS and AMD FSR 4 are D3D12-only and not on Android; FSR 1 / CAS (`present_effect`) are.
