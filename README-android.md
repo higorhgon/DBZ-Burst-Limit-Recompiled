@@ -141,7 +141,9 @@ more, depending on the phone) and roughly 10 GB of free space; keep the phone ch
    ```sh
    termux-setup-storage
    pkg update -y && pkg upgrade -y
-   pkg install -y git cmake ninja clang lld llvm python openjdk-21 aapt aapt2 apksigner d8 curl unzip libc++
+   for p in git cmake ninja clang lld llvm python openjdk-21 aapt aapt2 apksigner d8 curl unzip libc++; do
+     pkg install -y "$p" || echo ">>> FAILED: $p"
+   done
    termux-wake-lock
    ```
 

@@ -53,12 +53,22 @@ done
 [ -n "${PREFIX:-}" ] && [ -d "$PREFIX" ] && [[ "$PREFIX" == *com.termux* ]] ||
   die "this script is for Termux (on a PC, use scripts/build_android.sh)"
 [ "$(uname -m)" = "aarch64" ] || die "an arm64 (aarch64) phone is needed, this is $(uname -m)"
+# tool:package
 missing=()
-for tool in git cmake ninja clang clang++ python3 javac keytool java d8 aapt2 apksigner llvm-strip llvm-readelf curl unzip; do
-  command -v "$tool" >/dev/null || missing+=("$tool")
+packages=()
+for entry in git:git cmake:cmake ninja:ninja clang:clang clang++:clang python3:python \
+             javac:openjdk-21 keytool:openjdk-21 java:openjdk-21 d8:d8 aapt2:aapt2 \
+             apksigner:apksigner llvm-strip:llvm llvm-readelf:llvm curl:curl unzip:unzip; do
+  tool="${entry%%:*}"
+  package="${entry#*:}"
+  if ! command -v "$tool" >/dev/null; then
+    missing+=("$tool")
+    case " ${packages[*]} " in *" $package "*) ;; *) packages+=("$package") ;; esac
+  fi
 done
 [ ${#missing[@]} -eq 0 ] || die "missing: ${missing[*]}
-Install the packages from README-android.md, \"Building on the phone with Termux\"."
+Install them with (one at a time, so one failing package doesn't stop the others):
+  for p in ${packages[*]}; do pkg install -y \"\$p\" || echo \">>> FAILED: \$p\"; done"
 LIBCXX="$PREFIX/lib/libc++_shared.so"
 [ -f "$LIBCXX" ] || die "$LIBCXX not found (pkg install libc++)"
 
