@@ -41,6 +41,9 @@ public class GameActivity extends SDLActivity {
         args.add("--user_data_root=" + userDir.getAbsolutePath());
         args.add("--texture_folder=" + texturesDir.getAbsolutePath());
         args.add("--log_file=" + new File(userDir, "burstlimit.log").getAbsolutePath());
+        // Android kills the process when it is swiped away: write the log out
+        // every second so the last lines aren't lost with it.
+        args.add("--log_flush_interval=1");
         args.add("--fullscreen=true");
         String extra = getSharedPreferences(LauncherActivity.PREFS, MODE_PRIVATE)
             .getString(LauncherActivity.PREF_EXTRA_ARGS, "");
