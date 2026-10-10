@@ -73,13 +73,14 @@ LIBCXX="$PREFIX/lib/libc++_shared.so"
 [ -f "$LIBCXX" ] || die "$LIBCXX not found (pkg install libc++)"
 
 if [ -z "${JOBS:-}" ]; then
-  # Recompiled game files can take 2-3 GB of RAM each to compile.
+  # About 1.4 GB of RAM per compile job on average. If a compiler still runs
+  # out of memory, the compile step below retries with half the jobs.
   mem_kb="$(awk '/MemAvailable/ {print $2}' /proc/meminfo)"
-  JOBS=$(( mem_kb / (2600 * 1024) ))
+  JOBS=$(( mem_kb / (1400 * 1024) ))
   [ "$JOBS" -ge 1 ] || JOBS=1
   [ "$JOBS" -le "$(nproc)" ] || JOBS="$(nproc)"
 fi
-echo "Compile jobs: $JOBS (set JOBS=... to change; fewer if the build gets killed)"
+echo "Compile jobs: $JOBS of $(nproc) cores (set JOBS=... to change; fewer if the build gets killed)"
 
 mkdir -p "$OUT" "$STATE"
 LIBS="$OUT/lib/arm64-v8a"
@@ -144,7 +145,13 @@ if [ "$APK_ONLY" -eq 0 ]; then
   cmake "$BUILD" >/dev/null
 
   log "Compiling (the long part: can take an hour or more; keep the phone charging)"
-  cmake --build "$BUILD" --target burstlimit -j "$JOBS"
+  # A compiler killed for lack of memory fails the build: go on with half the
+  # jobs (what was compiled stays compiled). A real error fails at 1 job too.
+  until cmake --build "$BUILD" --target burstlimit -j "$JOBS"; do
+    [ "$JOBS" -gt 1 ] || die "compile failed (see the first error above)"
+    JOBS=$(( JOBS / 2 ))
+    echo "Compile failed, maybe out of memory: retrying with $JOBS jobs"
+  done
 
   log "Staging the native libraries"
   rm -rf "$LIBS" && mkdir -p "$LIBS"

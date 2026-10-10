@@ -167,7 +167,9 @@ more, depending on the phone) and roughly 10 GB of free space; keep the phone ch
 4. The APK is copied to **Downloads**: open it in the file manager to install it. On its first start it asks for the
    ISO (or extracted folder) as usual.
 
-If the build gets killed (the phone ran out of memory), run it again with fewer jobs: `JOBS=1
+The number of parallel compile jobs comes from the free RAM (about 1.4 GB each, at most one per core); a compile
+that fails is retried with half the jobs. Set it yourself with `JOBS=8 scripts/build_android_termux.sh`. If Android
+kills Termux itself (the phone ran out of memory), run it again with fewer jobs, e.g. `JOBS=2
 scripts/build_android_termux.sh` (it continues where it stopped). The signing key is made in
 `~/.burstlimit/burstlimit.keystore`: keep it to install later builds over this one. `scripts/xiso_extract.py
 game.iso out_dir` extracts a disc image on any machine with Python.
