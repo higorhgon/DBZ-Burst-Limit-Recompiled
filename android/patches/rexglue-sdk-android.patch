@@ -282,6 +282,31 @@ index 0c334f8..c4534c3 100644
  #define REX_LOAD_U8(x) (*(volatile u8*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
  #define REX_LOAD_U16(x) __builtin_bswap16(*(volatile u16*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
  #define REX_LOAD_U32(x) __builtin_bswap32(*(volatile u32*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
+diff --git a/src/audio/sdl/sdl_audio_driver.cpp b/src/audio/sdl/sdl_audio_driver.cpp
+index 20a2cd8..1855b5c 100644
+--- a/src/audio/sdl/sdl_audio_driver.cpp
++++ b/src/audio/sdl/sdl_audio_driver.cpp
+@@ -20,6 +20,7 @@
+ #include <rex/audio/sdl/sdl_audio_driver.h>
+ #include <rex/cvar.h>
+ #include <rex/dbg.h>
++#include <rex/platform.h>
+ #include <rex/logging.h>
+ #include <rex/perf/counter.h>
+ #include <SDL3/SDL.h>
+@@ -75,6 +76,12 @@ bool SDLAudioDriver::Initialize() {
+ 
+   // A 1-channel device gets the stereo fold too, then SDL collapses to mono.
+   // Handing it a 6ch stream instead would use SDL's own downmix.
++#if REX_PLATFORM_ANDROID
++  // Android reports the 6ch format it was asked for, and a 6ch output stream
++  // stops being drained on phones (stereo speakers and headsets): the game
++  // then waits forever for its audio frames to be consumed. Always stereo.
++  obtained_spec.channels = 2;
++#endif
+   if (obtained_spec.channels <= 2) {
+     SDL_DestroyAudioStream(sdl_stream_);
+     sdl_stream_ = nullptr;
 diff --git a/src/codegen/builders/system.cpp b/src/codegen/builders/system.cpp
 index b2d70f5..ca1ab5b 100644
 --- a/src/codegen/builders/system.cpp
