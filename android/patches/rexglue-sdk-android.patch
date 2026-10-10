@@ -845,6 +845,106 @@ index 8b862fc..53af533 100644
    }
  
    assert_true(cs->owning_thread == 0);
+diff --git a/src/system/xobject.cpp b/src/system/xobject.cpp
+index d358f39..ff08f1f 100644
+--- a/src/system/xobject.cpp
++++ b/src/system/xobject.cpp
+@@ -11,7 +11,12 @@
+ 
+ #include <vector>
+ 
++#include <fmt/format.h>
++
+ #include <rex/chrono/clock.h>
++#include <rex/logging.h>
++#include <rex/platform.h>
++#include <rex/system/thread_state.h>
+ #include <rex/stream.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/util/string_utils.h>  // For TranslateAnsiStringAddress
+@@ -29,6 +34,33 @@
+ 
+ namespace rex::system {
+ 
++#if REX_PLATFORM_ANDROID
++namespace {
++// Android gives the game process no debugger. An infinite wait runs in 5 s
++// slices (the same wait), and the first slice that times out logs who waits
++// on what and from where, so a deadlock can be read from the log.
++constexpr auto kWaitWatchSlice = std::chrono::milliseconds(5000);
++
++void LogLongWait(const char* kind, XObject* object, XObject* signaled = nullptr) {
++  XThread* thread = XThread::IsInThread() ? XThread::GetCurrentThread() : nullptr;
++  uint32_t lr = 0;
++  if (thread && thread->thread_state() && thread->thread_state()->context()) {
++    lr = static_cast<uint32_t>(thread->thread_state()->context()->lr);
++  }
++  std::string signal_text;
++  if (signaled) {
++    signal_text = fmt::format(" after signaling handle {:08X} type {}", signaled->handle(),
++                              static_cast<uint32_t>(signaled->type()));
++  }
++  REXSYS_WARN("[WaitWatch] '{}' (thread_id {:X}, guest lr {:08X}) {} > 5 s on handle {:08X} "
++              "type {} guest {:08X} '{}'{}",
++              thread ? thread->name() : std::string("?"), thread ? thread->thread_id() : 0, lr,
++              kind, object->handle(), static_cast<uint32_t>(object->type()),
++              object->guest_object(), object->name(), signal_text);
++}
++}  // namespace
++#endif
++
+ XObject::XObject(Type type) : kernel_state_(nullptr), pointer_ref_count_(1), type_(type) {
+   handles_.reserve(10);
+ }
+@@ -213,7 +245,20 @@ X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode, uint32_t a
+                                 : std::chrono::milliseconds::max();
+ 
+   XThread::CheckTitleTermination();
++#if REX_PLATFORM_ANDROID
++  rex::thread::WaitResult result;
++  if (timeout_ms == std::chrono::milliseconds::max()) {
++    result = rex::thread::Wait(wait_handle, alertable ? true : false, kWaitWatchSlice);
++    if (result == rex::thread::WaitResult::kTimeout) {
++      LogLongWait("Wait", this);
++      result = rex::thread::Wait(wait_handle, alertable ? true : false, timeout_ms);
++    }
++  } else {
++    result = rex::thread::Wait(wait_handle, alertable ? true : false, timeout_ms);
++  }
++#else
+   auto result = rex::thread::Wait(wait_handle, alertable ? true : false, timeout_ms);
++#endif
+   XThread::CheckTitleTermination();
+   switch (result) {
+     case rex::thread::WaitResult::kSuccess:
+@@ -239,9 +284,27 @@ X_STATUS XObject::SignalAndWait(XObject* signal_object, XObject* wait_object, ui
+                                       TimeoutTicksToMs(*opt_timeout)))
+                                 : std::chrono::milliseconds::max();
+ 
++#if REX_PLATFORM_ANDROID
++  rex::thread::WaitResult result;
++  if (timeout_ms == std::chrono::milliseconds::max()) {
++    result =
++        rex::thread::SignalAndWait(signal_object->GetWaitHandle(), wait_object->GetWaitHandle(),
++                                   alertable ? true : false, kWaitWatchSlice);
++    if (result == rex::thread::WaitResult::kTimeout) {
++      LogLongWait("SignalAndWait", wait_object, signal_object);
++      result = rex::thread::Wait(wait_object->GetWaitHandle(), alertable ? true : false,
++                                 timeout_ms);
++    }
++  } else {
++    result =
++        rex::thread::SignalAndWait(signal_object->GetWaitHandle(), wait_object->GetWaitHandle(),
++                                   alertable ? true : false, timeout_ms);
++  }
++#else
+   auto result =
+       rex::thread::SignalAndWait(signal_object->GetWaitHandle(), wait_object->GetWaitHandle(),
+                                  alertable ? true : false, timeout_ms);
++#endif
+   switch (result) {
+     case rex::thread::WaitResult::kSuccess:
+       wait_object->WaitCallback();
 diff --git a/src/system/xsocket.cpp b/src/system/xsocket.cpp
 index f772895..cff4b65 100644
 --- a/src/system/xsocket.cpp
