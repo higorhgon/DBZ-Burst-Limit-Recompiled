@@ -31,6 +31,92 @@ index d876846..3bf0de3 100644
  template <class, class>
  struct clock_time_conversion {};
  
+diff --git a/include/rex/kernel/import_trail.h b/include/rex/kernel/import_trail.h
+new file mode 100644
+index 0000000..18bf2b4
+--- /dev/null
++++ b/include/rex/kernel/import_trail.h
+@@ -0,0 +1,80 @@
++/**
++ * @file        import_trail.h
++ * @brief       Android: the last kernel imports each thread called
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#pragma once
++
++#include <cstdint>
++#include <string_view>
++
++#include <rex/hook.h>
++#include <rex/platform.h>
++
++#if REX_PLATFORM_ANDROID
++
++namespace rex::kernel::trail {
++
++// Android gives the game process no debugger. Each thread keeps the last
++// kernel imports it called (name, guest return address, arguments, result),
++// printed when it waits too long (see XObject::Wait), to find what a stuck
++// thread was doing.
++struct ImportCall {
++  const char* name;
++  uint32_t lr;
++  uint32_t args[4];
++  uint32_t result;
++  bool returned;
++};
++
++constexpr uint32_t kTrailSize = 48;
++
++struct ImportTrail {
++  ImportCall calls[kTrailSize];
++  uint32_t count = 0;
++};
++
++inline thread_local ImportTrail import_trail;
++
++// Called so often they would push everything else out.
++constexpr bool IsHotImport(std::string_view name) {
++  return name == "__imp__KeTlsGetValue" || name == "__imp__KeTlsSetValue" ||
++         name == "__imp__KeQueryPerformanceCounter" || name == "__imp__KeQuerySystemTime" ||
++         name == "__imp__KeGetCurrentProcessType";
++}
++
++inline ImportCall* Record(const char* name, const PPCContext& ctx) {
++  ImportTrail& trail = import_trail;
++  ImportCall& call = trail.calls[trail.count++ % kTrailSize];
++  call.name = name;
++  call.lr = static_cast<uint32_t>(ctx.lr);
++  call.args[0] = ctx.r3.u32;
++  call.args[1] = ctx.r4.u32;
++  call.args[2] = ctx.r5.u32;
++  call.args[3] = ctx.r6.u32;
++  call.result = 0;
++  call.returned = false;
++  return &call;
++}
++
++}  // namespace rex::kernel::trail
++
++#ifndef REXGLUE_ENABLE_PROFILING
++#undef REX_HOOK
++#define REX_HOOK(subroutine, function)                                             \
++  extern "C" REX_FUNC(subroutine) {                                                \
++    if constexpr (!::rex::kernel::trail::IsHotImport(#subroutine)) {                 \
++      auto* trail_call = ::rex::kernel::trail::Record(#subroutine, ctx);             \
++      ::rex::ppc::HostToGuestFunction<function>(ctx, base);                          \
++      trail_call->result = ctx.r3.u32;                                             \
++      trail_call->returned = true;                                                 \
++    } else {                                                                       \
++      ::rex::ppc::HostToGuestFunction<function>(ctx, base);                          \
++    }                                                                              \
++  }
++#endif
++
++#endif  // REX_PLATFORM_ANDROID
 diff --git a/include/rex/main_android.h b/include/rex/main_android.h
 new file mode 100644
 index 0000000..2d839d4
@@ -915,15 +1001,148 @@ index 9ac8d15..034e5ee 100644
  };
  
  std::unique_ptr<Event> Event::CreateManualResetEvent(bool initial_state) {
+diff --git a/src/kernel/crt/file.cpp b/src/kernel/crt/file.cpp
+index 1fe75ab..3a724d9 100644
+--- a/src/kernel/crt/file.cpp
++++ b/src/kernel/crt/file.cpp
+@@ -25,6 +25,7 @@
+ #include <rex/system/thread_state.h>
+ #include <rex/system/xfile.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ using rex::X_STATUS;
+ 
+diff --git a/src/kernel/xam/xam_avatar.cpp b/src/kernel/xam/xam_avatar.cpp
+index 4b5bdc9..ed24ea3 100644
+--- a/src/kernel/xam/xam_avatar.cpp
++++ b/src/kernel/xam/xam_avatar.cpp
+@@ -15,6 +15,7 @@
+ #include <rex/types.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex {
+ namespace kernel {
+diff --git a/src/kernel/xam/xam_content.cpp b/src/kernel/xam/xam_content.cpp
+index 86c4353..0a54863 100644
+--- a/src/kernel/xam/xam_content.cpp
++++ b/src/kernel/xam/xam_content.cpp
+@@ -20,6 +20,7 @@
+ #include <rex/system/xam/content_device.h>
+ #include <rex/system/xenumerator.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ REXCVAR_DEFINE_UINT32(license_mask, 0, "Kernel", "Set license mask for activated content");
+ 
+diff --git a/src/kernel/xam/xam_content_aggregate.cpp b/src/kernel/xam/xam_content_aggregate.cpp
+index de4a527..2b087fb 100644
+--- a/src/kernel/xam/xam_content_aggregate.cpp
++++ b/src/kernel/xam/xam_content_aggregate.cpp
+@@ -22,6 +22,7 @@
+ #include <rex/system/xam/content_device.h>
+ #include <rex/system/xenumerator.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex {
+ namespace kernel {
+diff --git a/src/kernel/xam/xam_content_device.cpp b/src/kernel/xam/xam_content_device.cpp
+index f153b69..ba77fca 100644
+--- a/src/kernel/xam/xam_content_device.cpp
++++ b/src/kernel/xam/xam_content_device.cpp
+@@ -18,6 +18,7 @@
+ #include <rex/system/xam/content_device.h>
+ #include <rex/system/xenumerator.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex {
+ namespace kernel {
+diff --git a/src/kernel/xam/xam_debug.cpp b/src/kernel/xam/xam_debug.cpp
+index 682f0e9..f2c5544 100644
+--- a/src/kernel/xam/xam_debug.cpp
++++ b/src/kernel/xam/xam_debug.cpp
+@@ -14,6 +14,7 @@
+ #include <rex/hook.h>
+ #include <rex/types.h>
+ #include <rex/system/kernel_state.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex {
+ namespace kernel {
+diff --git a/src/kernel/xam/xam_enum.cpp b/src/kernel/xam/xam_enum.cpp
+index 9dcab94..128ea85 100644
+--- a/src/kernel/xam/xam_enum.cpp
++++ b/src/kernel/xam/xam_enum.cpp
+@@ -24,6 +24,7 @@
+ #endif
+ 
+ #include <fmt/format.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex {
+ namespace kernel {
+diff --git a/src/kernel/xam/xam_info.cpp b/src/kernel/xam/xam_info.cpp
+index 1fda053..8c7e737 100644
+--- a/src/kernel/xam/xam_info.cpp
++++ b/src/kernel/xam/xam_info.cpp
+@@ -27,6 +27,7 @@
+ 
+ #include <fmt/format.h>
+ #include <fmt/xchar.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex {
+ namespace kernel {
+diff --git a/src/kernel/xam/xam_input.cpp b/src/kernel/xam/xam_input.cpp
+index 80c3634..9549065 100644
+--- a/src/kernel/xam/xam_input.cpp
++++ b/src/kernel/xam/xam_input.cpp
+@@ -18,6 +18,7 @@
+ #include <rex/runtime.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ #pragma GCC diagnostic ignored "-Wunused-parameter"
+ 
+diff --git a/src/kernel/xam/xam_locale.cpp b/src/kernel/xam/xam_locale.cpp
+index 4496ac3..9b4cc02 100644
+--- a/src/kernel/xam/xam_locale.cpp
++++ b/src/kernel/xam/xam_locale.cpp
+@@ -20,6 +20,7 @@
+ #include <rex/system/xenumerator.h>
+ #include <rex/system/xthread.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ REXCVAR_DEFINE_UINT32(user_country, 103, "Kernel", "User's country ID");
+ 
+diff --git a/src/kernel/xam/xam_msg.cpp b/src/kernel/xam/xam_msg.cpp
+index 704eb0c..17e9c9a 100644
+--- a/src/kernel/xam/xam_msg.cpp
++++ b/src/kernel/xam/xam_msg.cpp
+@@ -22,6 +22,7 @@
+ #include <rex/system/xio.h>
+ #include <rex/system/xthread.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex {
+ namespace kernel {
 diff --git a/src/kernel/xam/xam_net.cpp b/src/kernel/xam/xam_net.cpp
-index fa7f662..0d39faf 100644
+index fa7f662..1a70293 100644
 --- a/src/kernel/xam/xam_net.cpp
 +++ b/src/kernel/xam/xam_net.cpp
-@@ -54,6 +54,14 @@
+@@ -54,6 +54,15 @@
  #include <netinet/in.h>
  #include <netinet/ip.h>
  #include <sys/socket.h>
 +#include <cerrno>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
 +#ifndef SOCKET_ERROR
 +#define SOCKET_ERROR (-1)
 +#endif
@@ -934,7 +1153,7 @@ index fa7f662..0d39faf 100644
  #endif
  
  namespace rex {
-@@ -398,7 +406,11 @@ u32 NetDll_WSARecvFrom_entry(u32 caller, u32 socket, ppc_ptr_t<XWSABUF> buffers_
+@@ -398,7 +407,11 @@ u32 NetDll_WSARecvFrom_entry(u32 caller, u32 socket, ppc_ptr_t<XWSABUF> buffers_
      std::vector<uint8_t> packet(total_size);
  
      sockaddr_in sender = {};
@@ -946,11 +1165,271 @@ index fa7f662..0d39faf 100644
  
      const int received = recvfrom(
          native_socket, reinterpret_cast<char*>(packet.data()),
+diff --git a/src/kernel/xam/xam_notify.cpp b/src/kernel/xam/xam_notify.cpp
+index 9abcef6..70d928a 100644
+--- a/src/kernel/xam/xam_notify.cpp
++++ b/src/kernel/xam/xam_notify.cpp
+@@ -16,6 +16,7 @@
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xnotifylistener.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex {
+ namespace kernel {
+diff --git a/src/kernel/xam/xam_nui.cpp b/src/kernel/xam/xam_nui.cpp
+index bf10967..12071ba 100644
+--- a/src/kernel/xam/xam_nui.cpp
++++ b/src/kernel/xam/xam_nui.cpp
+@@ -14,6 +14,7 @@
+ #include <rex/runtime.h>
+ #include <rex/system/flags.h>
+ #include <rex/system/kernel_state.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex {
+ namespace kernel {
+diff --git a/src/kernel/xam/xam_party.cpp b/src/kernel/xam/xam_party.cpp
+index d75d65e..4a8b4f3 100644
+--- a/src/kernel/xam/xam_party.cpp
++++ b/src/kernel/xam/xam_party.cpp
+@@ -14,6 +14,7 @@
+ #include <rex/types.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ // Disable warnings about unused parameters for kernel functions
+ #pragma GCC diagnostic ignored "-Wunused-parameter"
+diff --git a/src/kernel/xam/xam_task.cpp b/src/kernel/xam/xam_task.cpp
+index e0e7dab..0abeddf 100644
+--- a/src/kernel/xam/xam_task.cpp
++++ b/src/kernel/xam/xam_task.cpp
+@@ -26,6 +26,7 @@
+ #endif
+ 
+ #include <fmt/format.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex {
+ namespace kernel {
+diff --git a/src/kernel/xam/xam_ui.cpp b/src/kernel/xam/xam_ui.cpp
+index e38cd25..69d84a0 100644
+--- a/src/kernel/xam/xam_ui.cpp
++++ b/src/kernel/xam/xam_ui.cpp
+@@ -29,6 +29,7 @@ REXCVAR_DEFINE_BOOL(headless, false, "Kernel",
+ #include <rex/ui/imgui_drawer.h>
+ #include <rex/ui/window.h>
+ #include <rex/ui/windowed_app_context.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex {
+ namespace kernel {
+diff --git a/src/kernel/xam/xam_user.cpp b/src/kernel/xam/xam_user.cpp
+index 4835cb4..c27c399 100644
+--- a/src/kernel/xam/xam_user.cpp
++++ b/src/kernel/xam/xam_user.cpp
+@@ -27,6 +27,7 @@
+ #include <rex/system/xio.h>
+ #include <rex/system/xthread.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ REXCVAR_DEFINE_UINT32(user_language, 1, "Kernel", "User's language ID");
+ 
+diff --git a/src/kernel/xam/xam_video.cpp b/src/kernel/xam/xam_video.cpp
+index d2b2ef7..0af1290 100644
+--- a/src/kernel/xam/xam_video.cpp
++++ b/src/kernel/xam/xam_video.cpp
+@@ -16,6 +16,7 @@
+ #include <rex/types.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex {
+ namespace kernel {
+diff --git a/src/kernel/xam/xam_voice.cpp b/src/kernel/xam/xam_voice.cpp
+index e48d6ce..132416d 100644
+--- a/src/kernel/xam/xam_voice.cpp
++++ b/src/kernel/xam/xam_voice.cpp
+@@ -18,6 +18,7 @@
+ #include <rex/types.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex {
+ namespace kernel {
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_audio.cpp b/src/kernel/xboxkrnl/xboxkrnl_audio.cpp
+index 86e7888..a7dda78 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_audio.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_audio.cpp
+@@ -20,6 +20,7 @@
+ #include <rex/runtime.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex::kernel::xboxkrnl {
+ using namespace rex::system;
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_audio_xma.cpp b/src/kernel/xboxkrnl/xboxkrnl_audio_xma.cpp
+index a84b5f5..17d063e 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_audio_xma.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_audio_xma.cpp
+@@ -24,6 +24,7 @@
+ #include <rex/runtime.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex::kernel::xboxkrnl {
+ using namespace rex::system;
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_crypt.cpp b/src/kernel/xboxkrnl/xboxkrnl_crypt.cpp
+index 765e042..f9164ed 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_crypt.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_crypt.cpp
+@@ -39,6 +39,7 @@
+ extern "C" {
+ #include "aes_128/aes.h"
+ }
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex::kernel::xboxkrnl {
+ 
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_debug.cpp b/src/kernel/xboxkrnl/xboxkrnl_debug.cpp
+index 670c446..1dac935 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_debug.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_debug.cpp
+@@ -21,6 +21,7 @@
+ #include <rex/system/xexception.h>
+ #include <rex/system/xthread.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex::kernel::xboxkrnl {
+ using namespace rex::system;
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_error.cpp b/src/kernel/xboxkrnl/xboxkrnl_error.cpp
+index e772bfd..46149b6 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_error.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_error.cpp
+@@ -25,6 +25,7 @@
+ #include <rex/system/user_module.h>
+ #include <rex/system/xthread.h>
+ #include <rex/thread/atomic.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex::kernel::xboxkrnl {
+ 
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_hal.cpp b/src/kernel/xboxkrnl/xboxkrnl_hal.cpp
+index 2575f9d..bd1aded 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_hal.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_hal.cpp
+@@ -18,6 +18,7 @@
+ #include <rex/types.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex::kernel::xboxkrnl {
+ 
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_hid.cpp b/src/kernel/xboxkrnl/xboxkrnl_hid.cpp
+index b511f62..048b8f5 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_hid.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_hid.cpp
+@@ -18,6 +18,7 @@
+ #include <rex/types.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex::kernel::xboxkrnl {
+ 
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_io.cpp b/src/kernel/xboxkrnl/xboxkrnl_io.cpp
+index cce4f65..63e1bf4 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_io.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_io.cpp
+@@ -28,6 +28,7 @@
+ #include <rex/system/xthread.h>
+ #include <rex/system/xtypes.h>
+ #include <rex/thread/mutex.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex::kernel::xboxkrnl {
+ using namespace rex::system;
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_io_info.cpp b/src/kernel/xboxkrnl/xboxkrnl_io_info.cpp
+index bd5de65..5876208 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_io_info.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_io_info.cpp
+@@ -29,6 +29,7 @@
+ #include <rex/system/xthread.h>
+ #include <rex/system/xtypes.h>
+ #include <rex/thread/mutex.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex::kernel::xboxkrnl {
+ using namespace rex::system;
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_memory.cpp b/src/kernel/xboxkrnl/xboxkrnl_memory.cpp
+index 8684eda..a3335b9 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_memory.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_memory.cpp
+@@ -22,6 +22,7 @@
+ #include <rex/types.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex::kernel::xboxkrnl {
+ using namespace rex::system;
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_misc.cpp b/src/kernel/xboxkrnl/xboxkrnl_misc.cpp
+index 58b6000..a7479ae 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_misc.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_misc.cpp
+@@ -19,6 +19,7 @@
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xthread.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex::kernel::xboxkrnl {
+ 
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_modules.cpp b/src/kernel/xboxkrnl/xboxkrnl_modules.cpp
+index dcd2001..d97f6de 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_modules.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_modules.cpp
+@@ -19,6 +19,7 @@
+ #include <rex/system/xexception.h>
+ #include <rex/system/xthread.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex::kernel::xboxkrnl {
+ using namespace rex::system;
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_ob.cpp b/src/kernel/xboxkrnl/xboxkrnl_ob.cpp
+index 5709e6d..6eea1bc 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_ob.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_ob.cpp
+@@ -24,6 +24,7 @@
+ #include <rex/system/xsemaphore.h>
+ #include <rex/system/xthread.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex::kernel::xboxkrnl {
+ using namespace rex::system;
 diff --git a/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp b/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp
-index 8b862fc..53af533 100644
+index 8b862fc..8cf62bb 100644
 --- a/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp
 +++ b/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp
-@@ -399,7 +399,30 @@ void RtlEnterCriticalSection_entry(ppc_ptr_t<X_RTL_CRITICAL_SECTION> cs) {
+@@ -30,6 +30,7 @@
+ #include <rex/system/xthread.h>
+ #include <rex/thread.h>
+ #include <rex/thread/atomic.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex::kernel::xboxkrnl {
+ using namespace rex::system;
+@@ -399,7 +400,30 @@ void RtlEnterCriticalSection_entry(ppc_ptr_t<X_RTL_CRITICAL_SECTION> cs) {
  
    if (rex::thread::atomic_inc(&cs->lock_count) != 0) {
      // Create a full waiter.
@@ -981,6 +1460,54 @@ index 8b862fc..53af533 100644
    }
  
    assert_true(cs->owning_thread == 0);
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_threading.cpp b/src/kernel/xboxkrnl/xboxkrnl_threading.cpp
+index 57fd161..26aee20 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_threading.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_threading.cpp
+@@ -38,6 +38,7 @@
+ #include <rex/system/xtypes.h>
+ #include <rex/thread/atomic.h>
+ #include <rex/thread/mutex.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex::kernel::xboxkrnl {
+ using namespace rex::system;
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_usbcam.cpp b/src/kernel/xboxkrnl/xboxkrnl_usbcam.cpp
+index e9d0b04..2825f02 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_usbcam.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_usbcam.cpp
+@@ -15,6 +15,7 @@
+ #include <rex/types.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex::kernel::xboxkrnl {
+ 
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_video.cpp b/src/kernel/xboxkrnl/xboxkrnl_video.cpp
+index 642f7ff..b388c86 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_video.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_video.cpp
+@@ -32,6 +32,7 @@
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xtypes.h>
+ #include <rex/ui/flags.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace {
+ // Display gamma type: 0 - linear, 1 - sRGB (CRT), 2 - BT.709 (HDTV), 3 - power
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_xconfig.cpp b/src/kernel/xboxkrnl/xboxkrnl_xconfig.cpp
+index f4ad126..a6f6a2c 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_xconfig.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_xconfig.cpp
+@@ -21,6 +21,7 @@
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/user_module.h>
+ #include <rex/system/xtypes.h>
++#include <rex/kernel/import_trail.h>  // Android: import trail (redefines REX_HOOK)
+ 
+ namespace rex::kernel::xboxkrnl {
+ 
 diff --git a/src/system/xevent.cpp b/src/system/xevent.cpp
 index c24fbd1..d80f39d 100644
 --- a/src/system/xevent.cpp
@@ -1006,10 +1533,10 @@ index c24fbd1..d80f39d 100644
    return 1;
  }
 diff --git a/src/system/xobject.cpp b/src/system/xobject.cpp
-index d358f39..ff08f1f 100644
+index d358f39..9dc26a0 100644
 --- a/src/system/xobject.cpp
 +++ b/src/system/xobject.cpp
-@@ -11,7 +11,12 @@
+@@ -11,7 +11,13 @@
  
  #include <vector>
  
@@ -1019,10 +1546,11 @@ index d358f39..ff08f1f 100644
 +#include <rex/logging.h>
 +#include <rex/platform.h>
 +#include <rex/system/thread_state.h>
++#include <rex/kernel/import_trail.h>
  #include <rex/stream.h>
  #include <rex/system/kernel_state.h>
  #include <rex/system/util/string_utils.h>  // For TranslateAnsiStringAddress
-@@ -29,6 +34,33 @@
+@@ -29,6 +35,49 @@
  
  namespace rex::system {
  
@@ -1049,6 +1577,22 @@ index d358f39..ff08f1f 100644
 +              thread ? thread->name() : std::string("?"), thread ? thread->thread_id() : 0, lr,
 +              kind, object->handle(), static_cast<uint32_t>(object->type()),
 +              object->guest_object(), object->name(), signal_text);
++  // What this thread asked the kernel for before it got stuck, oldest first.
++  const auto& trail = rex::kernel::trail::import_trail;
++  uint32_t total = trail.count;
++  uint32_t shown = std::min(total, rex::kernel::trail::kTrailSize);
++  std::string text;
++  for (uint32_t i = total - shown; i < total; ++i) {
++    const auto& call = trail.calls[i % rex::kernel::trail::kTrailSize];
++    std::string_view name = call.name;
++    if (name.starts_with("__imp__")) {
++      name.remove_prefix(7);
++    }
++    text += fmt::format("\n    #{} {} (lr {:08X}) {:08X} {:08X} {:08X} {:08X}", i, name, call.lr,
++                        call.args[0], call.args[1], call.args[2], call.args[3]);
++    text += call.returned ? fmt::format(" -> {:08X}", call.result) : std::string(" (in call)");
++  }
++  REXSYS_WARN("[WaitWatch] last {} of {} kernel calls of this thread:{}", shown, total, text);
 +}
 +}  // namespace
 +#endif
@@ -1056,7 +1600,7 @@ index d358f39..ff08f1f 100644
  XObject::XObject(Type type) : kernel_state_(nullptr), pointer_ref_count_(1), type_(type) {
    handles_.reserve(10);
  }
-@@ -213,7 +245,20 @@ X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode, uint32_t a
+@@ -213,7 +262,20 @@ X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode, uint32_t a
                                  : std::chrono::milliseconds::max();
  
    XThread::CheckTitleTermination();
@@ -1077,7 +1621,7 @@ index d358f39..ff08f1f 100644
    XThread::CheckTitleTermination();
    switch (result) {
      case rex::thread::WaitResult::kSuccess:
-@@ -239,9 +284,27 @@ X_STATUS XObject::SignalAndWait(XObject* signal_object, XObject* wait_object, ui
+@@ -239,9 +301,27 @@ X_STATUS XObject::SignalAndWait(XObject* signal_object, XObject* wait_object, ui
                                        TimeoutTicksToMs(*opt_timeout)))
                                  : std::chrono::milliseconds::max();
  
