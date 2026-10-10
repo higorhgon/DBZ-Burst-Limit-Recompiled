@@ -82,6 +82,22 @@ index c2c4fd4..6ab96f8 100644
  
    static inline void InitHostExceptions(u32& csr) noexcept {
      csr &= ~ExceptionMask;  // Clear enable bits to disable exceptions
+diff --git a/include/rex/system/xmemory.h b/include/rex/system/xmemory.h
+index 0c39a42..b2f4f3c 100644
+--- a/include/rex/system/xmemory.h
++++ b/include/rex/system/xmemory.h
+@@ -37,9 +37,10 @@ namespace rex::memory::detail {
+ ///   - Windows:        64KB granularity  -> offset
+ ///   - macOS arm64:    16KB granularity  -> offset
+ ///   - macOS x86_64:    4KB granularity  -> no offset
++///   - Android:        64KB granularity  -> offset (see allocation_granularity)
+ ///   - Linux (any):     4KB granularity  -> no offset (mmap handles it natively)
+ constexpr u32 PhysicalHostOffset([[maybe_unused]] u32 guest_addr) noexcept {
+-#if REX_PLATFORM_WIN32 || (REX_PLATFORM_MAC && defined(__aarch64__))
++#if REX_PLATFORM_WIN32 || REX_PLATFORM_ANDROID || (REX_PLATFORM_MAC && defined(__aarch64__))
+   return (guest_addr >= 0xE0000000u) ? 0x1000u : 0u;
+ #else
+   return 0u;
 diff --git a/include/rex/thread/fiber.h b/include/rex/thread/fiber.h
 index 352af67..e821078 100644
 --- a/include/rex/thread/fiber.h
