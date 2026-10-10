@@ -44,6 +44,7 @@ public class LauncherActivity extends Activity {
     static final String PREF_TOUCH_CONTROLS = "touch_controls";
     static final String PREF_TOUCH_OPACITY = "touch_opacity";
     static final String PREF_EXTRA_ARGS = "extra_args";
+    static final String PREF_LAST_PLAY = "last_play";
 
     private static final int REQUEST_ISO = 1;
     private static final int REQUEST_FOLDER = 2;
@@ -221,19 +222,29 @@ public class LauncherActivity extends Activity {
             }
             // This app's own logcat (the game process shares its uid): SDL,
             // Vulkan driver and native crash messages that never reach the file.
-            String logcat = readLogcat(24 * 1024);
+            String logcat = readLogcat(prefs.getLong(PREF_LAST_PLAY, 0), 24 * 1024);
             String text = content + (logcat.isEmpty() ? "" : "\n--- logcat ---\n" + logcat);
             ui.post(() -> showLogDialog(text));
         }, "read-log").start();
     }
 
-    private static String readLogcat(int maxChars) {
+    private static String readLogcat(long since, int maxChars) {
         try {
             // Warnings and errors from everything (Vulkan driver, crashes), SDL's
-            // own messages; the runtime's lines are in the file already.
-            Process process = new ProcessBuilder("logcat", "-d", "-v", "time", "-t", "20000",
-                    "rexglue:S", "SDL:I", "*:W")
-                .redirectErrorStream(true).start();
+            // own messages; the runtime's lines are in the file already. Only
+            // from the last time "Play" was pressed on.
+            java.util.List<String> command = new java.util.ArrayList<>(
+                java.util.Arrays.asList("logcat", "-d", "-v", "time"));
+            if (since > 0) {
+                command.add("-T");
+                command.add(new java.text.SimpleDateFormat("MM-dd HH:mm:ss.SSS", java.util.Locale.US)
+                    .format(new java.util.Date(since)));
+            } else {
+                command.add("-t");
+                command.add("20000");
+            }
+            command.addAll(java.util.Arrays.asList("rexglue:S", "SDL:I", "*:W"));
+            Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
             java.io.ByteArrayOutputStream data = new java.io.ByteArrayOutputStream();
             try (java.io.InputStream in = process.getInputStream()) {
                 byte[] buffer = new byte[8192];
@@ -362,6 +373,9 @@ public class LauncherActivity extends Activity {
     }
 
     private void play() {
+        // Each run starts a fresh log, so "View log" only shows this run.
+        new File(GameFiles.userDir(this), "burstlimit.log").delete();
+        prefs.edit().putLong(PREF_LAST_PLAY, System.currentTimeMillis()).commit();
         startActivity(new Intent(this, GameActivity.class));
     }
 
