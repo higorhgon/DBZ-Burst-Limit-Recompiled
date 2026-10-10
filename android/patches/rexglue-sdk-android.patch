@@ -710,7 +710,7 @@ index b52bf39..af2df73 100644
  
    // Use /dev/ashmem on API versions below 26, which added ASharedMemory.
 diff --git a/src/core/threading_posix.cpp b/src/core/threading_posix.cpp
-index 9ac8d15..fa7c6a9 100644
+index 9ac8d15..034e5ee 100644
 --- a/src/core/threading_posix.cpp
 +++ b/src/core/threading_posix.cpp
 @@ -71,14 +71,11 @@ static void* android_libc_;
@@ -742,16 +742,63 @@ index 9ac8d15..fa7c6a9 100644
      // Use robust mutexes so waits can recover if owner thread terminates.
      pthread_mutexattr_t attr;
      if (pthread_mutexattr_init(&attr) == 0) {
-@@ -290,7 +287,7 @@ class PosixConditionBase {
-   WaitResult Wait(std::chrono::milliseconds timeout) {
+@@ -287,10 +284,29 @@ class PosixConditionBase {
+   virtual ~PosixConditionBase() = default;
+   virtual bool Signal() = 0;
+ 
+-  WaitResult Wait(std::chrono::milliseconds timeout) {
++  // Pulses (PulseEvent) seen so far. A waiter that read it before signaling
++  // something else (SignalAndWait) is still released by a pulse that lands
++  // before it starts waiting, as with the atomic signal-and-wait of the
++  // console's kernel.
++  uint64_t pulse_generation() {
++    std::lock_guard<std::mutex> lock(mutex_);
++    return pulse_generation_;
++  }
++
++  WaitResult Wait(std::chrono::milliseconds timeout) { return WaitSince(timeout, kNoGeneration); }
++
++  // Wait, also released by a pulse after pulse generation `since`.
++  WaitResult WaitSince(std::chrono::milliseconds timeout, uint64_t since) {
      bool executed;
-     auto predicate = [this] { return this->signaled(); };
+-    auto predicate = [this] { return this->signaled(); };
 -#if REX_PLATFORM_LINUX
++    bool pulsed = false;
++    auto predicate = [this, &since, &pulsed] {
++      if (this->signaled()) {
++        return true;
++      }
++      pulsed = since != pulse_generation_ && pulse_tickets_ > 0;
++      return pulsed;
++    };
 +#if REX_PLATFORM_GNU_LINUX
      auto native_mutex = static_cast<pthread_mutex_t*>(mutex_.native_handle());
      int lock_result = pthread_mutex_lock(native_mutex);
      if (lock_result == EOWNERDEAD) {
-@@ -344,7 +341,7 @@ class PosixConditionBase {
+@@ -302,6 +318,9 @@ class PosixConditionBase {
+ #else
+     std::unique_lock<std::mutex> lock(mutex_);
+ #endif
++    if (since == kNoGeneration) {
++      since = pulse_generation_;
++    }
+     if (predicate()) {
+       executed = true;
+     } else {
+@@ -313,7 +332,11 @@ class PosixConditionBase {
+       }
+     }
+     if (executed) {
+-      post_execution();
++      if (pulsed) {
++        --pulse_tickets_;
++      } else {
++        post_execution();
++      }
+       return WaitResult::kSuccess;
+     } else {
+       return WaitResult::kTimeout;
+@@ -344,7 +367,7 @@ class PosixConditionBase {
        locks.reserve(handles.size());
  
        for (size_t i = 0; i < handles.size(); ++i) {
@@ -760,7 +807,38 @@ index 9ac8d15..fa7c6a9 100644
          auto native_mutex = static_cast<pthread_mutex_t*>(handles[i]->mutex_.native_handle());
          int result = pthread_mutex_trylock(native_mutex);
          if (result == 0 || result == EOWNERDEAD) {
-@@ -876,8 +873,16 @@ class PosixCondition<Thread> : public PosixConditionBase {
+@@ -428,8 +451,12 @@ class PosixConditionBase {
+  protected:
+   inline virtual bool signaled() const = 0;
+   inline virtual void post_execution() = 0;
++  static constexpr uint64_t kNoGeneration = ~uint64_t(0);
+   std::condition_variable cond_;
+   std::mutex mutex_;
++  uint64_t pulse_generation_ = 0;
++  // Waiters the last pulse may still release (1 for auto-reset events).
++  uint32_t pulse_tickets_ = 0;
+ };
+ 
+ // There really is no native POSIX handle for a single wait/signal construct
+@@ -458,6 +485,17 @@ class PosixCondition<Event> : public PosixConditionBase {
+     signal_ = false;
+   }
+ 
++  // Releases the threads waiting now (one for an auto-reset event) and leaves
++  // the event non-signaled, atomically: setting, sleeping and resetting lost
++  // the wakeup when a waiter didn't run in between.
++  void Pulse() {
++    auto lock = std::unique_lock<std::mutex>(mutex_);
++    signal_ = false;
++    ++pulse_generation_;
++    pulse_tickets_ = manual_reset_ ? std::numeric_limits<uint32_t>::max() : 1;
++    cond_.notify_all();
++  }
++
+  private:
+   inline bool signaled() const override { return signal_; }
+   inline void post_execution() override {
+@@ -876,8 +914,16 @@ class PosixCondition<Thread> : public PosixConditionBase {
      sigval value{};
      value.sival_ptr = this;
  #if REX_PLATFORM_ANDROID
@@ -779,6 +857,64 @@ index 9ac8d15..fa7c6a9 100644
  #else
      int result = pthread_sigqueue(thread_, GetSystemSignal(SignalType::kThreadUserCallback), value);
  #endif
+@@ -1165,6 +1211,7 @@ WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::millise
+ 
+   ScopedAlertableState alertable_state_guard(true);
+   auto deadline = ComputeAlertableDeadline(timeout);
++  const uint64_t since = posix_wait_handle->condition().pulse_generation();
+ 
+   while (true) {
+     if (DispatchCurrentThreadUserCallback()) {
+@@ -1173,7 +1220,8 @@ WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::millise
+     if (HasAlertableTimeoutElapsed(deadline)) {
+       return WaitResult::kTimeout;
+     }
+-    auto result = posix_wait_handle->condition().Wait(ComputeAlertableWaitTimeout(deadline));
++    auto result = posix_wait_handle->condition().WaitSince(ComputeAlertableWaitTimeout(deadline),
++                                                           since);
+     if (result != WaitResult::kTimeout) {
+       return result;
+     }
+@@ -1188,12 +1236,14 @@ WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_han
+   if (posix_wait_handle_to_signal == nullptr || posix_wait_handle_to_wait_on == nullptr) {
+     return WaitResult::kFailed;
+   }
++  auto& wait_condition = posix_wait_handle_to_wait_on->condition();
++  const uint64_t since = wait_condition.pulse_generation();
+   if (!posix_wait_handle_to_signal->condition().Signal()) {
+     return WaitResult::kFailed;
+   }
+ 
+   if (!is_alertable) {
+-    return posix_wait_handle_to_wait_on->condition().Wait(timeout);
++    return wait_condition.WaitSince(timeout, since);
+   }
+ 
+   ScopedAlertableState alertable_state_guard(true);
+@@ -1205,7 +1255,7 @@ WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_han
+     if (HasAlertableTimeoutElapsed(deadline)) {
+       return WaitResult::kTimeout;
+     }
+-    result = posix_wait_handle_to_wait_on->condition().Wait(ComputeAlertableWaitTimeout(deadline));
++    result = wait_condition.WaitSince(ComputeAlertableWaitTimeout(deadline), since);
+     if (result != WaitResult::kTimeout) {
+       return result;
+     }
+@@ -1252,13 +1302,7 @@ class PosixEvent : public PosixConditionHandle<Event> {
+   ~PosixEvent() override = default;
+   void Set() override { handle_.Signal(); }
+   void Reset() override { handle_.Reset(); }
+-  void Pulse() override {
+-    using namespace std::chrono_literals;
+-    handle_.Signal();
+-    MaybeYield();
+-    Sleep(10us);
+-    handle_.Reset();
+-  }
++  void Pulse() override { handle_.Pulse(); }
+ };
+ 
+ std::unique_ptr<Event> Event::CreateManualResetEvent(bool initial_state) {
 diff --git a/src/kernel/xam/xam_net.cpp b/src/kernel/xam/xam_net.cpp
 index fa7f662..0d39faf 100644
 --- a/src/kernel/xam/xam_net.cpp
@@ -845,6 +981,30 @@ index 8b862fc..53af533 100644
    }
  
    assert_true(cs->owning_thread == 0);
+diff --git a/src/system/xevent.cpp b/src/system/xevent.cpp
+index c24fbd1..d80f39d 100644
+--- a/src/system/xevent.cpp
++++ b/src/system/xevent.cpp
+@@ -9,6 +9,8 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <atomic>
++
+ #include <rex/logging.h>
+ #include <rex/stream.h>
+ #include <rex/system/xevent.h>
+@@ -79,6 +81,10 @@ int32_t XEvent::Set(uint32_t priority_increment, bool wait) {
+ }
+ 
+ int32_t XEvent::Pulse(uint32_t priority_increment, bool wait) {
++  static std::atomic<uint32_t> logged{0};
++  if (logged.fetch_add(1, std::memory_order_relaxed) < 20) {
++    REXSYS_DEBUG("XEvent::Pulse handle {:08X} ({})", handle(), manual_reset_ ? "manual" : "auto");
++  }
+   event_->Pulse();
+   return 1;
+ }
 diff --git a/src/system/xobject.cpp b/src/system/xobject.cpp
 index d358f39..ff08f1f 100644
 --- a/src/system/xobject.cpp
