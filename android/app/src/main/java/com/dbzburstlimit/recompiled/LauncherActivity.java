@@ -207,13 +207,13 @@ public class LauncherActivity extends Activity {
         return scroll;
     }
 
-    /** The end of burstlimit.log, to read, copy or share (Android/data isn't reachable from most file managers). */
+    /** A digest of burstlimit.log, to read, copy or share (Android/data isn't reachable from most file managers). */
     private void showLog() {
         new Thread(() -> {
             File log = new File(GameFiles.userDir(this), "burstlimit.log");
             String content;
             try {
-                content = tail(log, 160 * 1024);
+                content = digest(log);
             } catch (IOException e) {
                 content = "";
             }
@@ -291,23 +291,72 @@ public class LauncherActivity extends Activity {
             .show();
     }
 
-    private static String tail(File file, int maxBytes) throws IOException {
+    /**
+     * Startup (device, Vulkan features, warnings), the warnings and errors seen
+     * since with how often each came up, and the end of the log. Per-frame
+     * present lines are left out and runs of the same message are collapsed.
+     */
+    private static String digest(File file) throws IOException {
         if (!file.isFile()) {
             return "";
         }
-        try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(file, "r")) {
-            long length = in.length();
-            long start = Math.max(0, length - maxBytes);
-            byte[] data = new byte[(int) (length - start)];
-            in.seek(start);
-            in.readFully(data);
-            String text = new String(data, java.nio.charset.StandardCharsets.UTF_8);
-            if (start > 0) {
-                int newline = text.indexOf('\n');
-                text = newline >= 0 ? text.substring(newline + 1) : text;
+        final int headLines = 400;
+        final int tailLines = 300;
+        StringBuilder head = new StringBuilder();
+        java.util.ArrayDeque<String> tail = new java.util.ArrayDeque<>();
+        java.util.LinkedHashMap<String, Integer> repeated = new java.util.LinkedHashMap<>();
+        int lineCount = 0;
+        String previous = null;
+        int previousRepeats = 0;
+        try (java.io.BufferedReader in = new java.io.BufferedReader(new java.io.InputStreamReader(
+                new java.io.FileInputStream(file), java.nio.charset.StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = in.readLine()) != null) {
+                if (line.contains("XELOG_GPU PRESENT")) {
+                    continue;
+                }
+                // "[date time] [level] [category] [tid] message" -> "[level] [category] message".
+                String message = line.replaceFirst("^\\[[^\\]]*\\] (\\[[^\\]]*\\] \\[[^\\]]*\\]) \\[t\\d+\\]", "$1");
+                if (message.startsWith("[warning]") || message.startsWith("[error]")
+                        || message.startsWith("[critical]")) {
+                    Integer count = repeated.get(message);
+                    if (count != null || repeated.size() < 200) {
+                        repeated.put(message, count == null ? 1 : count + 1);
+                    }
+                }
+                if (lineCount < headLines) {
+                    head.append(line).append('\n');
+                    lineCount++;
+                    continue;
+                }
+                if (message.equals(previous)) {
+                    previousRepeats++;
+                    continue;
+                }
+                if (previousRepeats > 0) {
+                    tail.addLast("    (same line " + previousRepeats + " more times)");
+                }
+                previous = message;
+                previousRepeats = 0;
+                tail.addLast(line);
+                while (tail.size() > tailLines) {
+                    tail.removeFirst();
+                }
             }
-            return text;
         }
+        if (previousRepeats > 0) {
+            tail.addLast("    (same line " + previousRepeats + " more times)");
+        }
+        StringBuilder out = new StringBuilder(head);
+        out.append("\n--- warnings/errors (count) ---\n");
+        for (java.util.Map.Entry<String, Integer> entry : repeated.entrySet()) {
+            out.append(entry.getValue()).append("x ").append(entry.getKey()).append('\n');
+        }
+        out.append("\n--- end of log ---\n");
+        for (String line : tail) {
+            out.append(line).append('\n');
+        }
+        return out.toString();
     }
 
     private LinearLayout card() {
