@@ -796,7 +796,7 @@ index b52bf39..af2df73 100644
  
    // Use /dev/ashmem on API versions below 26, which added ASharedMemory.
 diff --git a/src/core/threading_posix.cpp b/src/core/threading_posix.cpp
-index 9ac8d15..034e5ee 100644
+index 9ac8d15..d9011c5 100644
 --- a/src/core/threading_posix.cpp
 +++ b/src/core/threading_posix.cpp
 @@ -71,14 +71,11 @@ static void* android_libc_;
@@ -828,7 +828,7 @@ index 9ac8d15..034e5ee 100644
      // Use robust mutexes so waits can recover if owner thread terminates.
      pthread_mutexattr_t attr;
      if (pthread_mutexattr_init(&attr) == 0) {
-@@ -287,10 +284,29 @@ class PosixConditionBase {
+@@ -287,10 +284,28 @@ class PosixConditionBase {
    virtual ~PosixConditionBase() = default;
    virtual bool Signal() = 0;
  
@@ -851,17 +851,16 @@ index 9ac8d15..034e5ee 100644
 -#if REX_PLATFORM_LINUX
 +    bool pulsed = false;
 +    auto predicate = [this, &since, &pulsed] {
-+      if (this->signaled()) {
-+        return true;
-+      }
++      // A ticket handed to this waiter comes first: the object may also be
++      // signaled for whoever waits next.
 +      pulsed = since != pulse_generation_ && pulse_tickets_ > 0;
-+      return pulsed;
++      return pulsed || this->signaled();
 +    };
 +#if REX_PLATFORM_GNU_LINUX
      auto native_mutex = static_cast<pthread_mutex_t*>(mutex_.native_handle());
      int lock_result = pthread_mutex_lock(native_mutex);
      if (lock_result == EOWNERDEAD) {
-@@ -302,6 +318,9 @@ class PosixConditionBase {
+@@ -302,18 +317,29 @@ class PosixConditionBase {
  #else
      std::unique_lock<std::mutex> lock(mutex_);
  #endif
@@ -871,20 +870,28 @@ index 9ac8d15..034e5ee 100644
      if (predicate()) {
        executed = true;
      } else {
-@@ -313,7 +332,11 @@ class PosixConditionBase {
++      ++blocked_waiters_;
+       if (timeout == std::chrono::milliseconds::max()) {
+         cond_.wait(lock, predicate);
+         executed = true;  // Did not time out;
+       } else {
+         executed = cond_.wait_for(lock, timeout, predicate);
        }
++      --blocked_waiters_;
      }
      if (executed) {
 -      post_execution();
 +      if (pulsed) {
-+        --pulse_tickets_;
++        if (pulse_tickets_ != std::numeric_limits<uint32_t>::max()) {
++          --pulse_tickets_;
++        }
 +      } else {
 +        post_execution();
 +      }
        return WaitResult::kSuccess;
      } else {
        return WaitResult::kTimeout;
-@@ -344,7 +367,7 @@ class PosixConditionBase {
+@@ -344,7 +370,7 @@ class PosixConditionBase {
        locks.reserve(handles.size());
  
        for (size_t i = 0; i < handles.size(); ++i) {
@@ -893,7 +900,7 @@ index 9ac8d15..034e5ee 100644
          auto native_mutex = static_cast<pthread_mutex_t*>(handles[i]->mutex_.native_handle());
          int result = pthread_mutex_trylock(native_mutex);
          if (result == 0 || result == EOWNERDEAD) {
-@@ -428,8 +451,12 @@ class PosixConditionBase {
+@@ -428,8 +454,28 @@ class PosixConditionBase {
   protected:
    inline virtual bool signaled() const = 0;
    inline virtual void post_execution() = 0;
@@ -901,12 +908,42 @@ index 9ac8d15..034e5ee 100644
    std::condition_variable cond_;
    std::mutex mutex_;
 +  uint64_t pulse_generation_ = 0;
-+  // Waiters the last pulse may still release (1 for auto-reset events).
++  // Waiters from before the last pulse generation that may still be released:
++  // all of them after a manual-reset pulse, otherwise one per handoff.
 +  uint32_t pulse_tickets_ = 0;
++  // Threads blocked in WaitSince right now.
++  uint32_t blocked_waiters_ = 0;
++
++  // Gives one of the threads already waiting the right to return, without
++  // signaling the object for threads that start waiting later. Returns false
++  // when every waiter already has one.
++  bool HandOffToWaiter() {
++    if (blocked_waiters_ <= pulse_tickets_) {
++      return false;
++    }
++    ++pulse_generation_;
++    ++pulse_tickets_;
++    cond_.notify_all();
++    return true;
++  }
  };
  
  // There really is no native POSIX handle for a single wait/signal construct
-@@ -458,6 +485,17 @@ class PosixCondition<Event> : public PosixConditionBase {
+@@ -448,6 +494,13 @@ class PosixCondition<Event> : public PosixConditionBase {
+ 
+   bool Signal() override {
+     auto lock = std::unique_lock<std::mutex>(mutex_);
++    // As on the console, setting an auto-reset event that a thread is
++    // waiting on releases that thread: leaving it signaled let the setter
++    // itself, waiting on it again right away, take it back before the woken
++    // waiter ran (the waiter then slept forever).
++    if (!manual_reset_ && HandOffToWaiter()) {
++      return true;
++    }
+     signal_ = true;
+     cond_.notify_all();
+     return true;
+@@ -458,6 +511,21 @@ class PosixCondition<Event> : public PosixConditionBase {
      signal_ = false;
    }
  
@@ -916,15 +953,34 @@ index 9ac8d15..034e5ee 100644
 +  void Pulse() {
 +    auto lock = std::unique_lock<std::mutex>(mutex_);
 +    signal_ = false;
-+    ++pulse_generation_;
-+    pulse_tickets_ = manual_reset_ ? std::numeric_limits<uint32_t>::max() : 1;
-+    cond_.notify_all();
++    if (manual_reset_) {
++      ++pulse_generation_;
++      pulse_tickets_ = std::numeric_limits<uint32_t>::max();
++      cond_.notify_all();
++    } else {
++      HandOffToWaiter();
++    }
 +  }
 +
   private:
    inline bool signaled() const override { return signal_; }
    inline void post_execution() override {
-@@ -876,8 +914,16 @@ class PosixCondition<Thread> : public PosixConditionBase {
+@@ -485,7 +553,13 @@ class PosixCondition<Semaphore> : public PosixConditionBase {
+     if (out_previous_count) {
+       *out_previous_count = count_;
+     }
+-    count_ += release_count;
++    // As with events: a release goes to a thread already waiting first, so
++    // the releaser can't take it back by waiting again right away.
++    for (uint32_t i = 0; i < release_count; ++i) {
++      if (!HandOffToWaiter()) {
++        ++count_;
++      }
++    }
+     cond_.notify_all();
+     return true;
+   }
+@@ -876,8 +950,16 @@ class PosixCondition<Thread> : public PosixConditionBase {
      sigval value{};
      value.sival_ptr = this;
  #if REX_PLATFORM_ANDROID
@@ -943,7 +999,7 @@ index 9ac8d15..034e5ee 100644
  #else
      int result = pthread_sigqueue(thread_, GetSystemSignal(SignalType::kThreadUserCallback), value);
  #endif
-@@ -1165,6 +1211,7 @@ WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::millise
+@@ -1165,6 +1247,7 @@ WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::millise
  
    ScopedAlertableState alertable_state_guard(true);
    auto deadline = ComputeAlertableDeadline(timeout);
@@ -951,7 +1007,7 @@ index 9ac8d15..034e5ee 100644
  
    while (true) {
      if (DispatchCurrentThreadUserCallback()) {
-@@ -1173,7 +1220,8 @@ WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::millise
+@@ -1173,7 +1256,8 @@ WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::millise
      if (HasAlertableTimeoutElapsed(deadline)) {
        return WaitResult::kTimeout;
      }
@@ -961,7 +1017,7 @@ index 9ac8d15..034e5ee 100644
      if (result != WaitResult::kTimeout) {
        return result;
      }
-@@ -1188,12 +1236,14 @@ WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_han
+@@ -1188,12 +1272,14 @@ WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_han
    if (posix_wait_handle_to_signal == nullptr || posix_wait_handle_to_wait_on == nullptr) {
      return WaitResult::kFailed;
    }
@@ -977,7 +1033,7 @@ index 9ac8d15..034e5ee 100644
    }
  
    ScopedAlertableState alertable_state_guard(true);
-@@ -1205,7 +1255,7 @@ WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_han
+@@ -1205,7 +1291,7 @@ WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_han
      if (HasAlertableTimeoutElapsed(deadline)) {
        return WaitResult::kTimeout;
      }
@@ -986,7 +1042,7 @@ index 9ac8d15..034e5ee 100644
      if (result != WaitResult::kTimeout) {
        return result;
      }
-@@ -1252,13 +1302,7 @@ class PosixEvent : public PosixConditionHandle<Event> {
+@@ -1252,13 +1338,7 @@ class PosixEvent : public PosixConditionHandle<Event> {
    ~PosixEvent() override = default;
    void Set() override { handle_.Signal(); }
    void Reset() override { handle_.Reset(); }
