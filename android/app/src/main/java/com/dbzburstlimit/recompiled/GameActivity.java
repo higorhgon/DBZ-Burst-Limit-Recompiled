@@ -45,6 +45,7 @@ public class GameActivity extends SDLActivity {
         // every second so the last lines aren't lost with it.
         args.add("--log_flush_interval=1");
         args.add("--fullscreen=true");
+        loadVulkanDriver();
         String extra = getSharedPreferences(LauncherActivity.PREFS, MODE_PRIVATE)
             .getString(LauncherActivity.PREF_EXTRA_ARGS, "");
         for (String arg : extra.trim().split("\\s+")) {
@@ -53,6 +54,74 @@ public class GameActivity extends SDLActivity {
             }
         }
         return args.toArray(new String[0]);
+    }
+
+    private static final String TURNIP_LIB = "vulkan.ad07xx.so";
+
+    /** Loads Mesa Turnip in place of the phone's Vulkan driver; returns what is used. */
+    private static native String nativeLoadVulkanDriver(String driverDir, String library, String hookDir);
+
+    /**
+     * Before SDL_main (getArguments runs on SDL's main thread): on Adreno GPUs
+     * the game uses the bundled Mesa Turnip driver, since the phone's own
+     * driver draws it wrong. The launcher can force either one.
+     */
+    private void loadVulkanDriver() {
+        String choice = getSharedPreferences(LauncherActivity.PREFS, MODE_PRIVATE)
+            .getString(LauncherActivity.PREF_GPU_DRIVER, "auto");
+        if (choice.equals("system") || (choice.equals("auto") && !isQualcomm())) {
+            android.util.Log.w("burstlimit-driver", "Vulkan driver: system driver (" + choice + ")");
+            return;
+        }
+        try {
+            File dir = new File(getFilesDir(), "drivers/turnip");
+            if (!copyDriverAsset("drivers/turnip/" + TURNIP_LIB, new File(dir, TURNIP_LIB))) {
+                android.util.Log.w("burstlimit-driver", "Vulkan driver: system driver (no Turnip in this APK)");
+                return;
+            }
+            nativeLoadVulkanDriver(dir.getAbsolutePath(), TURNIP_LIB, getApplicationInfo().nativeLibraryDir);
+        } catch (Throwable t) {
+            android.util.Log.w("burstlimit-driver", "Vulkan driver: system driver (" + t + ")", t);
+        }
+    }
+
+    private static boolean isQualcomm() {
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
+            String soc = android.os.Build.SOC_MANUFACTURER;
+            if (soc != null && (soc.equalsIgnoreCase("QTI") || soc.toLowerCase(java.util.Locale.US).contains("qualcomm"))) {
+                return true;
+            }
+        }
+        String hardware = android.os.Build.HARDWARE;
+        return hardware != null && hardware.toLowerCase(java.util.Locale.US).startsWith("qcom");
+    }
+
+    /** Copies a bundled driver out of the APK (a library can only be opened from a file); false if absent. */
+    private boolean copyDriverAsset(String asset, File dest) throws java.io.IOException {
+        long size;
+        try (android.content.res.AssetFileDescriptor fd = getAssets().openFd(asset)) {
+            size = fd.getLength();
+        } catch (java.io.FileNotFoundException e) {
+            return false;
+        }
+        if (dest.isFile() && dest.length() == size) {
+            return true;
+        }
+        //noinspection ResultOfMethodCallIgnored
+        dest.getParentFile().mkdirs();
+        File part = new File(dest.getPath() + ".part");
+        try (java.io.InputStream in = getAssets().open(asset);
+             java.io.OutputStream out = new java.io.FileOutputStream(part)) {
+            byte[] buffer = new byte[1 << 16];
+            int n;
+            while ((n = in.read(buffer)) > 0) {
+                out.write(buffer, 0, n);
+            }
+        }
+        if (!part.renameTo(dest)) {
+            throw new java.io.IOException("cannot write " + dest);
+        }
+        return true;
     }
 
     @Override

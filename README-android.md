@@ -70,6 +70,23 @@ setting from the [settings table](README.md#settings) as a command-line option, 
   It hides itself while a physical controller is connected and comes back when it disconnects. Fingers can slide
   from one button to another.
 
+### Graphics driver
+
+The phone's own Adreno (Snapdragon) Vulkan driver draws these Xbox 360 games wrong, so on Snapdragon phones
+the game runs on **Mesa Turnip**, an open-source driver for Adreno GPUs that comes with the APK. It is loaded
+with [libadrenotools](https://github.com/bylaws/libadrenotools), the same way as the
+[RB2-Android](https://github.com/moddedrounds/RB2-Android) port. **Advanced > Graphics driver** in the
+launcher picks *Automatic* (Turnip on Snapdragon, the phone's driver elsewhere), *Turnip* or *the phone's
+own driver*. If Turnip doesn't find the GPU, the phone's driver is used; "View log" shows which one ran
+(`burstlimit-driver` line).
+
+The Termux build downloads both, pinned by commit / SHA-256: libadrenotools (BSD-2-Clause) into
+`thirdparty/libadrenotools`, and Turnip v26.0.0 R8 from
+[K11MCH1/AdrenoToolsDrivers](https://github.com/K11MCH1/AdrenoToolsDrivers) (Mesa, MIT).
+
+GPU options for testing (put them in **Extra settings**): `--gpu_force_msaa_off=true` (render without
+multisampling), `--vulkan_disable_depth_unorm24=true` (32-bit float depth instead of D24).
+
 ### Logs
 
 `files/user/burstlimit.log` (path above), or live with `adb logcat -s rexglue SDL`. A crash report needs the

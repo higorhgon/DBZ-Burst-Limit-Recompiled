@@ -42,4 +42,8 @@
     <string name="close">Close</string>
     <string name="log_empty">No game log yet (%1$s).</string>
     <string name="log_copied">Log copied</string>
+    <string name="gpu_driver">Graphics driver</string>
+    <string name="gpu_driver_auto">Automatic (Mesa Turnip on Snapdragon / Adreno)</string>
+    <string name="gpu_driver_turnip">Mesa Turnip (bundled)</string>
+    <string name="gpu_driver_system">Phone\'s own driver</string>
 </resources>

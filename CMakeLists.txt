@@ -50,7 +50,7 @@ if(WIN32)
     add_executable(burstlimit WIN32 ${BURSTLIMIT_SOURCES})
 elseif(ANDROID)
     # SDLActivity loads libmain.so and calls its SDL_main (android/).
-    list(APPEND BURSTLIMIT_SOURCES src/burstlimit_android.cpp)
+    list(APPEND BURSTLIMIT_SOURCES src/burstlimit_android.cpp src/android_gpu_driver.cpp)
     add_library(burstlimit SHARED ${BURSTLIMIT_SOURCES})
     set_target_properties(burstlimit PROPERTIES OUTPUT_NAME main)
 else()
@@ -104,7 +104,26 @@ target_compile_definitions(burstlimit PRIVATE "BURSTLIMIT_VERSION=\"${_bl_versio
 target_link_libraries(burstlimit PRIVATE imgui::imgui)
 if(ANDROID)
     # burstlimit_android.cpp: the touch controller is an SDL virtual gamepad.
-    target_link_libraries(burstlimit PRIVATE SDL3::Headers)
+    target_link_libraries(burstlimit PRIVATE SDL3::Headers Vulkan::Headers android log)
+    # android_gpu_driver.cpp: the Mesa Turnip driver goes through libadrenotools
+    # (BSD-2-Clause), which the build scripts check out here; without it the
+    # game always uses the phone's own Vulkan driver.
+    set(BURSTLIMIT_ADRENOTOOLS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libadrenotools"
+        CACHE PATH "libadrenotools checkout")
+    if(EXISTS "${BURSTLIMIT_ADRENOTOOLS}/CMakeLists.txt")
+        # Termux's native CMake doesn't set it; libadrenotools refuses to configure without.
+        if(NOT CMAKE_ANDROID_ARCH_ABI)
+            set(CMAKE_ANDROID_ARCH_ABI arm64-v8a)
+        endif()
+        add_subdirectory("${BURSTLIMIT_ADRENOTOOLS}" libadrenotools EXCLUDE_FROM_ALL)
+        target_link_libraries(burstlimit PRIVATE adrenotools)
+        target_compile_definitions(burstlimit PRIVATE BURSTLIMIT_HAVE_ADRENOTOOLS=1)
+        # Hook libraries libadrenotools loads from the APK's native library folder.
+        add_dependencies(burstlimit main_hook hook_impl file_redirect_hook gsl_alloc_hook)
+        message(STATUS "Custom Vulkan driver support (libadrenotools): ON")
+    else()
+        message(STATUS "Custom Vulkan driver support (libadrenotools): OFF (no ${BURSTLIMIT_ADRENOTOOLS})")
+    endif()
 endif()
 target_include_directories(burstlimit PRIVATE "${CMAKE_BINARY_DIR}/rexglue-sdk/include")
 

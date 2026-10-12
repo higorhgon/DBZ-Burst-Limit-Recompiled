@@ -45,6 +45,7 @@ public class LauncherActivity extends Activity {
     static final String PREF_TOUCH_OPACITY = "touch_opacity";
     static final String PREF_EXTRA_ARGS = "extra_args";
     static final String PREF_LAST_PLAY = "last_play";
+    static final String PREF_GPU_DRIVER = "gpu_driver";  // "auto", "turnip" or "system"
 
     private static final int REQUEST_ISO = 1;
     private static final int REQUEST_FOLDER = 2;
@@ -153,9 +154,27 @@ public class LauncherActivity extends Activity {
         controls.addView(opacity, margins(-1, dp(6)));
         column.addView(controls, margins(-1, dp(16)));
 
-        // Advanced: extra settings as command-line options.
+        // Advanced: graphics driver and extra settings as command-line options.
         LinearLayout advanced = card();
         advanced.addView(heading(getString(R.string.section_advanced)));
+        advanced.addView(text(getString(R.string.gpu_driver), 14), margins(-1, dp(8)));
+        android.widget.RadioGroup driver = new android.widget.RadioGroup(this);
+        String[] driverValues = {"auto", "turnip", "system"};
+        int[] driverLabels = {R.string.gpu_driver_auto, R.string.gpu_driver_turnip, R.string.gpu_driver_system};
+        String currentDriver = prefs.getString(PREF_GPU_DRIVER, "auto");
+        for (int i = 0; i < driverValues.length; i++) {
+            android.widget.RadioButton option = new android.widget.RadioButton(this);
+            option.setId(View.generateViewId());
+            option.setText(driverLabels[i]);
+            option.setTag(driverValues[i]);
+            driver.addView(option);
+            if (driverValues[i].equals(currentDriver)) {
+                driver.check(option.getId());
+            }
+        }
+        driver.setOnCheckedChangeListener((group, id) -> prefs.edit()
+            .putString(PREF_GPU_DRIVER, (String) group.findViewById(id).getTag()).apply());
+        advanced.addView(driver, margins(-1, dp(4)));
         TextView extraLabel = text(getString(R.string.extra_args), 13);
         extraLabel.setAlpha(0.7f);
         advanced.addView(extraLabel, margins(-1, dp(8)));

@@ -33,6 +33,15 @@ PACKAGE="com.dbzburstlimit.recompiled"
 # Android 15 platform (android.jar, API 35) from Google's SDK repository.
 PLATFORM_ZIP_URL="https://dl.google.com/android/repository/platform-35_r02.zip"
 US_XEX_SHA1="aec598f88cf51181fc377b148e0b1ad30db4485c"
+# Mesa Turnip, the Vulkan driver the game uses on Adreno GPUs (the phone's own
+# driver draws it wrong): K11MCH1/AdrenoToolsDrivers v26.0.0-rc08 (Mesa, MIT),
+# loaded through libadrenotools (bylaws, BSD-2-Clause), both pinned. Same
+# choice as the RB2-Android port (github.com/moddedrounds/RB2-Android).
+TURNIP_URL="https://github.com/K11MCH1/AdrenoToolsDrivers/releases/download/v26.0.0-rc08/Turnip_v26.0.0_R8.zip"
+TURNIP_SHA256="e634db0f929e2205e95511c769071817d0390180ec72c8e690bc76375e813715"
+TURNIP_LIB="vulkan.ad07xx.so"
+ADRENOTOOLS_URL="https://github.com/bylaws/libadrenotools.git"
+ADRENOTOOLS_COMMIT="8fae8ce254dfc1344527e05301e43f37dea2df80"
 
 log() { printf '\n==> %s\n' "$*"; }
 die() { printf '\nerror: %s\n' "$*" >&2; exit 1; }
@@ -119,6 +128,16 @@ if [ "$APK_ONLY" -eq 0 ]; then
   log "SDK Android patch"
   "$ROOT/scripts/apply_sdk_patch.sh"
 
+  # --- libadrenotools (custom Vulkan driver loader) ------------------------------
+  ADRENOTOOLS="$ROOT/thirdparty/libadrenotools"
+  if [ "$(git -C "$ADRENOTOOLS" rev-parse HEAD 2>/dev/null || true)" != "$ADRENOTOOLS_COMMIT" ]; then
+    log "Fetching libadrenotools"
+    [ -d "$ADRENOTOOLS/.git" ] || git clone -q "$ADRENOTOOLS_URL" "$ADRENOTOOLS"
+    git -C "$ADRENOTOOLS" fetch -q origin
+    git -C "$ADRENOTOOLS" checkout -q "$ADRENOTOOLS_COMMIT"
+    git -C "$ADRENOTOOLS" submodule update --init --recursive -q
+  fi
+
   # --- Native build -------------------------------------------------------------
   # Termux's CMake builds natively for Android, so the SDK's own rexglue
   # (built in the same tree) runs the codegen here.
@@ -156,12 +175,15 @@ if [ "$APK_ONLY" -eq 0 ]; then
   log "Staging the native libraries"
   rm -rf "$LIBS" && mkdir -p "$LIBS"
   SDK_OUT="$SDK_SRC/out/android-arm64"
-  for lib in "$BUILD/libmain.so" "$SDK_OUT/librexruntime.so" "$SDK_OUT/librexgpu-xenos.so" "$LIBCXX"; do
+  HOOKS="$BUILD/libadrenotools/src/hook"
+  for lib in "$BUILD/libmain.so" "$SDK_OUT/librexruntime.so" "$SDK_OUT/librexgpu-xenos.so" "$LIBCXX" \
+             "$HOOKS/libhook_impl.so" "$HOOKS/libmain_hook.so" "$HOOKS/libfile_redirect_hook.so" \
+             "$HOOKS/libgsl_alloc_hook.so"; do
     [ -f "$lib" ] || die "missing $lib"
     llvm-strip --strip-unneeded -o "$LIBS/$(basename "$lib")" "$lib"
   done
   # Everything they load must come with Android or the APK, not with Termux.
-  allowed=" libc.so libm.so libdl.so liblog.so libandroid.so libOpenSLES.so libc++_shared.so librexruntime.so "
+  allowed=" libc.so libm.so libdl.so liblog.so libandroid.so libOpenSLES.so libc++_shared.so librexruntime.so libhook_impl.so "
   for lib in "$LIBS"/*.so; do
     for needed in $(llvm-readelf -d "$lib" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'); do
       case "$allowed" in
@@ -175,6 +197,19 @@ fi
 
 [ -f "$LIBS/libmain.so" ] || die "no native libraries in $LIBS (run without --apk-only first)"
 
+# --- Turnip driver (an APK asset; GameActivity copies it out) ---------------------
+ASSETS="$OUT/assets"
+TURNIP_ZIP="$STATE/turnip-$TURNIP_SHA256.zip"
+if [ ! -f "$TURNIP_ZIP" ]; then
+  log "Downloading the Mesa Turnip driver (~3.5 MB)"
+  curl -fL --retry 3 -o "$TURNIP_ZIP.part" "$TURNIP_URL" || die "download failed: $TURNIP_URL"
+  echo "$TURNIP_SHA256  $TURNIP_ZIP.part" | sha256sum -c - >/dev/null ||
+    { rm -f "$TURNIP_ZIP.part"; die "the Turnip download does not match its SHA-256"; }
+  mv "$TURNIP_ZIP.part" "$TURNIP_ZIP"
+fi
+rm -rf "$ASSETS" && mkdir -p "$ASSETS/drivers/turnip"
+unzip -q -o "$TURNIP_ZIP" "$TURNIP_LIB" -d "$ASSETS/drivers/turnip"
+
 # --- APK ----------------------------------------------------------------------
 log "Packaging the APK"
 WORK="$OUT/apk-work"
@@ -186,7 +221,8 @@ aapt2 link -o "$WORK/base.apk" -I "$PLATFORM_JAR" \
   --manifest "$WORK/AndroidManifest.xml" \
   --min-sdk-version "$API_LEVEL" --target-sdk-version 35 \
   --version-code "$VERSION_CODE" --version-name "$VERSION_NAME" \
-  --java "$WORK/gen" --auto-add-overlay "$WORK/res.zip"
+  --java "$WORK/gen" --auto-add-overlay "$WORK/res.zip" \
+  -A "$ASSETS" -0 so
 
 SDL_JAVA="$SDK_SRC/thirdparty/sdl3/android-project/app/src/main/java"
 find "$APP/java" "$SDL_JAVA" "$WORK/gen" -name '*.java' > "$WORK/sources.txt"

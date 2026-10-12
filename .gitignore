@@ -38,3 +38,4 @@
 # IDE
 /.vs/
 /.vscode/
+/thirdparty/libadrenotools/
