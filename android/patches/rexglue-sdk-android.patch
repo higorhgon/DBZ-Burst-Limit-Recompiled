@@ -58,6 +58,29 @@ index dce3dbf..c6f2b54 100644
    bool native_2x_msaa_with_attachments_;
    bool native_2x_msaa_no_attachments_;
  
+diff --git a/include/rex/input/sdl/sdl_input_driver.h b/include/rex/input/sdl/sdl_input_driver.h
+index be1f9b8..a102571 100644
+--- a/include/rex/input/sdl/sdl_input_driver.h
++++ b/include/rex/input/sdl/sdl_input_driver.h
+@@ -12,6 +12,7 @@
+ #pragma once
+ 
+ #include <atomic>
++#include <chrono>
+ #include <mutex>
+ #include <optional>
+ #include <vector>
+@@ -65,6 +66,10 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener
+     bool state_changed;
+     bool is_active;
+     DeviceId id;
++    // Presses still reported after the button went up, until the guest has read them and they
++    // lasted input_min_press_ms (a tap between two reads was lost at a low frame rate).
++    uint16_t held_buttons = 0;
++    std::chrono::steady_clock::time_point pressed_at[16] = {};
+     // Per pad rather than per guest user, so it survives reassignment.
+     KeystrokeState keystroke;
+   };
 diff --git a/include/rex/kernel/import_trail.h b/include/rex/kernel/import_trail.h
 new file mode 100644
 index 0000000..18bf2b4
@@ -1508,6 +1531,62 @@ index 6788214..c466026 100644
        return;
      case Usage::kTransferDestination:
        stage_mask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+diff --git a/src/input/sdl/sdl_input_driver.cpp b/src/input/sdl/sdl_input_driver.cpp
+index 57f65c4..2634af5 100644
+--- a/src/input/sdl/sdl_input_driver.cpp
++++ b/src/input/sdl/sdl_input_driver.cpp
+@@ -23,6 +23,13 @@
+ #include <rex/logging.h>
+ #include <rex/ui/virtual_key.h>
+ 
++REXCVAR_DEFINE_INT32(input_min_press_ms, 80, "Input",
++                     "A button press is reported to the game for at least this long and at least "
++                     "until the game has read it once, so a quick tap between two of the game's "
++                     "reads (one per frame) isn't lost at a low frame rate; 0 = report the "
++                     "current state only")
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
+ REXCVAR_DEFINE_STRING(hid_mappings_file, "gamecontrollerdb.txt", "Input",
+                       "Path to SDL gamecontroller mappings file");
+ 
+@@ -340,6 +347,22 @@ X_RESULT SDLInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+     controller->state_changed = false;
+   }
+   std::memcpy(out_state, &controller->state, sizeof(*out_state));
++  if (controller->held_buttons) {
++    out_state->gamepad.buttons =
++        uint16_t(uint16_t(out_state->gamepad.buttons) | controller->held_buttons);
++    const uint16_t current = controller->state.gamepad.buttons;
++    const auto now = std::chrono::steady_clock::now();
++    const auto min_press = std::chrono::milliseconds(std::max(0, REXCVAR_GET(input_min_press_ms)));
++    for (uint32_t bit = 0; bit < 16; ++bit) {
++      const uint16_t mask = uint16_t(1u << bit);
++      if ((controller->held_buttons & mask) && !(current & mask) &&
++          now - controller->pressed_at[bit] >= min_press) {
++        // Released, read and long enough: the next read shows the release.
++        controller->held_buttons &= ~mask;
++        controller->state_changed = true;
++      }
++    }
++  }
+   if (!is_active) {
+     // Simulate an "untouched" controller. When we become active again the
+     // pressed buttons aren't lost and will be visible again.
+@@ -746,6 +769,14 @@ void SDLInputDriver::OnControllerDeviceButtonChangedLocked(const SDL_Event& even
+       return;
+     }
+     xbuttons |= xbutton;
++    if (REXCVAR_GET(input_min_press_ms) > 0) {
++      for (uint32_t bit = 0; bit < 16; ++bit) {
++        if (xbutton & (1u << bit)) {
++          controller.pressed_at[bit] = std::chrono::steady_clock::now();
++        }
++      }
++      controller.held_buttons |= xbutton;
++    }
+   } else {
+     xbuttons &= ~xbutton;
+   }
 diff --git a/src/kernel/crt/file.cpp b/src/kernel/crt/file.cpp
 index 1fe75ab..3a724d9 100644
 --- a/src/kernel/crt/file.cpp
