@@ -45,6 +45,11 @@ public class GameActivity extends SDLActivity {
         // every second so the last lines aren't lost with it.
         args.add("--log_flush_interval=1");
         args.add("--fullscreen=true");
+        // Render passes instead of dynamic rendering: the DBZBL-Android-LAN
+        // port got black frames after the title with dynamic rendering (Mali),
+        // like the black screen here on Mesa Turnip. An extra setting
+        // --vulkan_dynamic_rendering=true below still wins.
+        args.add("--vulkan_dynamic_rendering=false");
         loadVulkanDriver();
         String extra = getSharedPreferences(LauncherActivity.PREFS, MODE_PRIVATE)
             .getString(LauncherActivity.PREF_EXTRA_ARGS, "");
