@@ -42,6 +42,9 @@ REXCVAR_DEFINE_INT32(android_thread_dump, 0, "Android",
                      "Seconds after start to log every thread's call stack (where a stuck game "
                      "waits), and again 30 s later; 0 = off");
 
+// android_gpu_driver.cpp
+extern std::string g_burstlimit_vulkan_driver_status;
+
 namespace {
 
 std::mutex g_pad_mutex;
@@ -389,6 +392,8 @@ struct CpuReportStarter {
     std::thread([] {
       // The cvars are parsed by then.
       std::this_thread::sleep_for(std::chrono::seconds(5));
+      REXLOG_INFO("[GpuDriver] {} (the Vulkan device lines above show which one runs)",
+                  g_burstlimit_vulkan_driver_status);
       CpuReportLoop();
     }).detach();
   }

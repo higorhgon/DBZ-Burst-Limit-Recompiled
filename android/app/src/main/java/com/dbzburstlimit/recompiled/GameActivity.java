@@ -103,6 +103,7 @@ public class GameActivity extends SDLActivity {
                 library = prefs.getString(DriverImport.PREF_CUSTOM_DRIVER_LIB, "");
                 if (library.isEmpty() || !new File(dir, library).isFile()) {
                     android.util.Log.w("burstlimit-driver", "Vulkan driver: system driver (imported driver missing)");
+                    warnDriverFallback("imported driver missing");
                     return false;
                 }
             } else {
@@ -118,12 +119,24 @@ public class GameActivity extends SDLActivity {
                 // render pass breaks / resolves on 4x MSAA targets it beats GMEM.
                 android.system.Os.setenv("TU_DEBUG", "sysmem", true);
             }
-            return nativeLoadVulkanDriver(dir.getAbsolutePath(), library,
-                getApplicationInfo().nativeLibraryDir).startsWith("Turnip");
+            String status = nativeLoadVulkanDriver(dir.getAbsolutePath(), library,
+                getApplicationInfo().nativeLibraryDir);
+            if (status.startsWith("Turnip")) {
+                return true;
+            }
+            warnDriverFallback(status);
+            return false;
         } catch (Throwable t) {
             android.util.Log.w("burstlimit-driver", "Vulkan driver: system driver (" + t + ")", t);
+            warnDriverFallback(t.toString());
             return false;
         }
+    }
+
+    /** The chosen driver didn't load: say so, the game runs on the phone's. */
+    private void warnDriverFallback(String why) {
+        runOnUiThread(() -> android.widget.Toast.makeText(this,
+            getString(R.string.driver_fallback, why), android.widget.Toast.LENGTH_LONG).show());
     }
 
     /** Copies a bundled driver out of the APK (a library can only be opened from a file); false if absent. */

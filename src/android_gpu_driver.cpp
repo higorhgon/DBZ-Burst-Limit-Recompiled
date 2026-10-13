@@ -126,6 +126,10 @@ std::string ToString(JNIEnv* env, jstring s) {
 
 }  // namespace
 
+// What nativeLoadVulkanDriver ended up with, for the game log
+// (burstlimit_android.cpp); set before SDL_main starts the game.
+std::string g_burstlimit_vulkan_driver_status = "system driver (not asked for another one)";
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_dbzburstlimit_recompiled_GameActivity_nativeLoadVulkanDriver(JNIEnv* env, jclass,
                                                                       jstring driver_dir,
@@ -134,5 +138,6 @@ Java_com_dbzburstlimit_recompiled_GameActivity_nativeLoadVulkanDriver(JNIEnv* en
   const std::string status =
       Load(ToString(env, driver_dir), ToString(env, library), ToString(env, hook_dir));
   LOGW("Vulkan driver: %s", status.c_str());
+  g_burstlimit_vulkan_driver_status = status;
   return env->NewStringUTF(status.c_str());
 }
