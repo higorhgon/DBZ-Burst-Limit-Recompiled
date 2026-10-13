@@ -67,7 +67,8 @@ missing=()
 packages=()
 for entry in git:git cmake:cmake ninja:ninja clang:clang clang++:clang python3:python \
              javac:openjdk-21 keytool:openjdk-21 java:openjdk-21 d8:d8 aapt2:aapt2 \
-             apksigner:apksigner llvm-strip:llvm llvm-readelf:llvm curl:curl unzip:unzip; do
+             apksigner:apksigner llvm-strip:llvm llvm-readelf:llvm curl:curl unzip:unzip \
+             glslangValidator:glslang spirv-opt:spirv-tools; do
   tool="${entry%%:*}"
   package="${entry#*:}"
   if ! command -v "$tool" >/dev/null; then
@@ -127,6 +128,10 @@ if [ "$APK_ONLY" -eq 0 ]; then
   # --- SDK Android patch --------------------------------------------------------
   log "SDK Android patch"
   "$ROOT/scripts/apply_sdk_patch.sh"
+
+  # --- Direct host resolve shaders (SDK patch, vulkan/render_target_cache.cpp) --
+  python3 "$ROOT/scripts/gen_direct_host_resolve.py" "$ROOT/android/shaders/direct_host_resolve" \
+    "$ROOT/thirdparty/rexglue-sdk/src/graphics/shaders/vulkan_spirv/direct_host_resolve_generated.h"
 
   # --- libadrenotools (custom Vulkan driver loader) ------------------------------
   ADRENOTOOLS="$ROOT/thirdparty/libadrenotools"

@@ -81,7 +81,7 @@ jobs:
             libx11-dev libx11-xcb-dev libxcb1-dev libxcursor-dev libxext-dev libxrandr-dev libxi-dev \
             libxss-dev libxtst-dev libxfixes-dev libxinerama-dev libxkbcommon-dev libwayland-dev \
             wayland-protocols libegl-dev libdecor-0-dev libdrm-dev libgbm-dev libasound2-dev \
-            libpulse-dev libpipewire-0.3-dev
+            libpulse-dev libpipewire-0.3-dev glslang-tools spirv-tools
           clang-20 --version | head -1
 
       - name: Set up Java 17

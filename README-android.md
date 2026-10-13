@@ -93,8 +93,17 @@ The Termux build downloads both, pinned by commit / SHA-256: libadrenotools (BSD
 [K11MCH1/AdrenoToolsDrivers](https://github.com/K11MCH1/AdrenoToolsDrivers) (Mesa, MIT).
 
 GPU options for testing (put them in **Extra settings**): `--vulkan_disable_depth_unorm24=true` (32-bit
-float depth instead of D24). `--gpu_force_msaa_off=true` breaks this game's picture. The log has a
-`[FrameStats]` line (GPU work per frame) and a `[CpuReport]` line (busiest threads, GPU load) every 10 s.
+float depth instead of D24). `--gpu_force_msaa_off=true` breaks this game's picture.
+`--direct_host_resolve=false` turns off the direct resolve (below), to compare. The log has a
+`[FrameStats]` line (GPU work per frame; "direct" counts the resolves that took the direct path) and a
+`[CpuReport]` line (busiest threads, GPU load) every 10 s.
+
+**Direct resolve.** A resolve (the game copying a rendered picture into a texture) normally goes render
+target → EDRAM buffer → texture memory. The direct path, ported from
+[XenDroid](https://github.com/rfandango/XenDroid) (Xenia's BSD license), copies the render target straight
+into texture memory with compute shaders, one pass and one buffer round trip less. Its shaders
+(`android/shaders/direct_host_resolve`) are built during the build with glslang
+(`scripts/gen_direct_host_resolve.py`); resolves it can't do still take the old path.
 
 ### Logs
 
@@ -167,7 +176,7 @@ more, depending on the phone) and roughly 10 GB of free space; keep the phone ch
    ```sh
    termux-setup-storage
    pkg update -y && pkg upgrade -y
-   for p in git cmake ninja clang lld llvm python openjdk-21 aapt aapt2 apksigner d8 curl unzip libc++; do
+   for p in git cmake ninja clang lld llvm python openjdk-21 aapt aapt2 apksigner d8 curl unzip libc++ glslang spirv-tools; do
      pkg install -y "$p" || echo ">>> FAILED: $p"
    done
    termux-wake-lock

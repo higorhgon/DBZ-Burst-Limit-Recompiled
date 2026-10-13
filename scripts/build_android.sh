@@ -128,6 +128,14 @@ from it at build time (the APK itself asks for the ISO on the phone). See README
   # --- SDK Android patch --------------------------------------------------------
   log "SDK Android patch"
   "$ROOT/scripts/apply_sdk_patch.sh"
+  # Direct host resolve shaders; without glslang every resolve takes the slower
+  # dump path.
+  if command -v glslangValidator >/dev/null && command -v spirv-opt >/dev/null; then
+    python3 "$ROOT/scripts/gen_direct_host_resolve.py" "$ROOT/android/shaders/direct_host_resolve" \
+      "$SDK_SRC/src/graphics/shaders/vulkan_spirv/direct_host_resolve_generated.h"
+  else
+    echo "warning: no glslangValidator / spirv-opt: building without the direct host resolve"
+  fi
 
   # --- Codegen tool for the build machine ------------------------------------
   if [ -z "${HOST_REXGLUE:-}" ]; then
