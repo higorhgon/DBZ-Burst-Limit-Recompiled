@@ -71,15 +71,16 @@ public class GameActivity extends SDLActivity {
     private static native String nativeLoadVulkanDriver(String driverDir, String library, String hookDir);
 
     /**
-     * Before SDL_main (getArguments runs on SDL's main thread): on Adreno GPUs
-     * the game uses the bundled Mesa Turnip driver, since the phone's own
-     * driver draws it wrong. The launcher can force either one. True when
-     * Turnip is in use.
+     * Before SDL_main (getArguments runs on SDL's main thread): the bundled
+     * Mesa Turnip driver in place of the phone's, when the launcher asks for
+     * it. True when Turnip is in use.
      */
     private boolean loadVulkanDriver() {
         String choice = getSharedPreferences(LauncherActivity.PREFS, MODE_PRIVATE)
             .getString(LauncherActivity.PREF_GPU_DRIVER, "auto");
-        if (choice.equals("system") || (choice.equals("auto") && !isQualcomm())) {
+        // Automatic = the phone's driver: on the Adreno 740 it ran the fights
+        // faster than Turnip (21 vs 16 FPS, both GPU-bound) and draws them right.
+        if (!choice.equals("turnip")) {
             android.util.Log.w("burstlimit-driver", "Vulkan driver: system driver (" + choice + ")");
             return false;
         }
@@ -95,17 +96,6 @@ public class GameActivity extends SDLActivity {
             android.util.Log.w("burstlimit-driver", "Vulkan driver: system driver (" + t + ")", t);
             return false;
         }
-    }
-
-    private static boolean isQualcomm() {
-        if (android.os.Build.VERSION.SDK_INT >= 31) {
-            String soc = android.os.Build.SOC_MANUFACTURER;
-            if (soc != null && (soc.equalsIgnoreCase("QTI") || soc.toLowerCase(java.util.Locale.US).contains("qualcomm"))) {
-                return true;
-            }
-        }
-        String hardware = android.os.Build.HARDWARE;
-        return hardware != null && hardware.toLowerCase(java.util.Locale.US).startsWith("qcom");
     }
 
     /** Copies a bundled driver out of the APK (a library can only be opened from a file); false if absent. */

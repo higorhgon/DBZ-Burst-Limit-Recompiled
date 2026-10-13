@@ -41,7 +41,7 @@
     <string name="log_empty">Ainda não há log do jogo (%1$s).</string>
     <string name="log_copied">Log copiado</string>
     <string name="gpu_driver">Driver de vídeo</string>
-    <string name="gpu_driver_auto">Automático (Mesa Turnip em Snapdragon / Adreno)</string>
+    <string name="gpu_driver_auto">Automático (driver do celular)</string>
     <string name="gpu_driver_turnip">Mesa Turnip (incluído)</string>
     <string name="gpu_driver_system">Driver do próprio celular</string>
 </resources>
