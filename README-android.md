@@ -79,6 +79,10 @@ launcher picks *Automatic* (the phone's own driver: faster in the fights on the 
 phone's own driver*. If Turnip doesn't find the GPU, the phone's driver is used; "View log" shows which one ran
 (`burstlimit-driver` line).
 
+On Turnip the game renders untiled by default (`TU_DEBUG=sysmem`, the XenDroid default; launcher checkbox
+under Advanced), and on every driver it runs with XenDroid's tiled-GPU settings: unclipped draws estimated
+on the CPU, and point sprites / rectangles / quads kept out of geometry shaders.
+
 **Import driver (.zip)** installs another Turnip build from your storage, in the AdrenoTools package
 format the Xenia ports use (a `.so` plus `meta.json`), and selects it as *Imported*. On a Galaxy S23
 (8 Gen 2, One UI) a build with the One UI UBWC hint, such as "Turnip v26.3.0 r2 8G2-OneUI", ran much better

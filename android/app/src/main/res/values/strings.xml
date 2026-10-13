@@ -49,4 +49,5 @@
     <string name="import_driver">Import driver (.zip)</string>
     <string name="gpu_driver_custom">Imported: %1$s</string>
     <string name="driver_imported">Driver installed and selected: %1$s</string>
+    <string name="turnip_sysmem">Turnip: render without tiling (TU_DEBUG=sysmem, as XenDroid)</string>
 </resources>

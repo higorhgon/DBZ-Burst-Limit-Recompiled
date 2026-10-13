@@ -49,6 +49,16 @@ public class GameActivity extends SDLActivity {
         // port got black frames after the title with dynamic rendering (Mali).
         // An extra setting --vulkan_dynamic_rendering=true below still wins.
         args.add("--vulkan_dynamic_rendering=false");
+        // Tiled-GPU settings the XenDroid port (Xenia Edge on Android, 30 FPS in
+        // this game on the same phone) runs with: estimate unclipped draws on
+        // the CPU so screen-space draws don't claim the whole EDRAM (spurious
+        // render target ownership transfers), and keep geometry shaders out of
+        // Adreno's binning pass (point sprites / rectangles expanded in the
+        // vertex shader, quads converted on the CPU).
+        args.add("--execute_unclipped_draw_vs_on_cpu=true");
+        args.add("--vulkan_force_expand_point_sprites_in_vs=true");
+        args.add("--vulkan_force_expand_rectangle_lists_in_vs=true");
+        args.add("--vulkan_force_convert_quad_lists_to_triangle_lists=true");
         if (loadVulkanDriver()) {
             // Turnip reports sparse binding, but the shared memory buffer bound
             // that way read back as zeros here: a black picture while the game
@@ -102,6 +112,11 @@ public class GameActivity extends SDLActivity {
                     android.util.Log.w("burstlimit-driver", "Vulkan driver: system driver (no Turnip in this APK)");
                     return false;
                 }
+            }
+            if (prefs.getBoolean(LauncherActivity.PREF_TURNIP_SYSMEM, true)) {
+                // Untiled rendering on Turnip, as XenDroid defaults to: with many
+                // render pass breaks / resolves on 4x MSAA targets it beats GMEM.
+                android.system.Os.setenv("TU_DEBUG", "sysmem", true);
             }
             return nativeLoadVulkanDriver(dir.getAbsolutePath(), library,
                 getApplicationInfo().nativeLibraryDir).startsWith("Turnip");

@@ -45,7 +45,8 @@ public class LauncherActivity extends Activity {
     static final String PREF_TOUCH_OPACITY = "touch_opacity";
     static final String PREF_EXTRA_ARGS = "extra_args";
     static final String PREF_LAST_PLAY = "last_play";
-    static final String PREF_GPU_DRIVER = "gpu_driver";  // "auto", "turnip" or "system"
+    static final String PREF_GPU_DRIVER = "gpu_driver";  // "auto", "turnip", "system" or "custom"
+    static final String PREF_TURNIP_SYSMEM = "turnip_sysmem";
 
     private static final int REQUEST_ISO = 1;
     private static final int REQUEST_FOLDER = 2;
@@ -163,6 +164,12 @@ public class LauncherActivity extends Activity {
         fillDriverOptions();
         advanced.addView(driverGroup, margins(-1, dp(4)));
         advanced.addView(button(getString(R.string.import_driver), v -> pickDriver()), margins(-1, dp(6)));
+        CheckBox sysmem = new CheckBox(this);
+        sysmem.setText(R.string.turnip_sysmem);
+        sysmem.setChecked(prefs.getBoolean(PREF_TURNIP_SYSMEM, true));
+        sysmem.setOnCheckedChangeListener(
+            (b, checked) -> prefs.edit().putBoolean(PREF_TURNIP_SYSMEM, checked).apply());
+        advanced.addView(sysmem, margins(-1, dp(6)));
         TextView extraLabel = text(getString(R.string.extra_args), 13);
         extraLabel.setAlpha(0.7f);
         advanced.addView(extraLabel, margins(-1, dp(8)));
