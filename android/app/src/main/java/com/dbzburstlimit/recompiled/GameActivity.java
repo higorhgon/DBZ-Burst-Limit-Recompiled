@@ -46,11 +46,15 @@ public class GameActivity extends SDLActivity {
         args.add("--log_flush_interval=1");
         args.add("--fullscreen=true");
         // Render passes instead of dynamic rendering: the DBZBL-Android-LAN
-        // port got black frames after the title with dynamic rendering (Mali),
-        // like the black screen here on Mesa Turnip. An extra setting
-        // --vulkan_dynamic_rendering=true below still wins.
+        // port got black frames after the title with dynamic rendering (Mali).
+        // An extra setting --vulkan_dynamic_rendering=true below still wins.
         args.add("--vulkan_dynamic_rendering=false");
-        loadVulkanDriver();
+        if (loadVulkanDriver()) {
+            // Turnip reports sparse binding, but the shared memory buffer bound
+            // that way read back as zeros here: a black picture while the game
+            // ran. RB2-Android also always turns it off.
+            args.add("--vulkan_sparse_shared_memory=false");
+        }
         String extra = getSharedPreferences(LauncherActivity.PREFS, MODE_PRIVATE)
             .getString(LauncherActivity.PREF_EXTRA_ARGS, "");
         for (String arg : extra.trim().split("\\s+")) {
@@ -69,24 +73,27 @@ public class GameActivity extends SDLActivity {
     /**
      * Before SDL_main (getArguments runs on SDL's main thread): on Adreno GPUs
      * the game uses the bundled Mesa Turnip driver, since the phone's own
-     * driver draws it wrong. The launcher can force either one.
+     * driver draws it wrong. The launcher can force either one. True when
+     * Turnip is in use.
      */
-    private void loadVulkanDriver() {
+    private boolean loadVulkanDriver() {
         String choice = getSharedPreferences(LauncherActivity.PREFS, MODE_PRIVATE)
             .getString(LauncherActivity.PREF_GPU_DRIVER, "auto");
         if (choice.equals("system") || (choice.equals("auto") && !isQualcomm())) {
             android.util.Log.w("burstlimit-driver", "Vulkan driver: system driver (" + choice + ")");
-            return;
+            return false;
         }
         try {
             File dir = new File(getFilesDir(), "drivers/turnip");
             if (!copyDriverAsset("drivers/turnip/" + TURNIP_LIB, new File(dir, TURNIP_LIB))) {
                 android.util.Log.w("burstlimit-driver", "Vulkan driver: system driver (no Turnip in this APK)");
-                return;
+                return false;
             }
-            nativeLoadVulkanDriver(dir.getAbsolutePath(), TURNIP_LIB, getApplicationInfo().nativeLibraryDir);
+            return nativeLoadVulkanDriver(dir.getAbsolutePath(), TURNIP_LIB,
+                getApplicationInfo().nativeLibraryDir).startsWith("Turnip");
         } catch (Throwable t) {
             android.util.Log.w("burstlimit-driver", "Vulkan driver: system driver (" + t + ")", t);
+            return false;
         }
     }
 

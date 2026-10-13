@@ -7,15 +7,19 @@
 
 #include <jni.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #include <cxxabi.h>
 #include <dirent.h>
@@ -31,7 +35,10 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 
-REXCVAR_DEFINE_INT32(android_thread_dump, 25, "Android",
+REXCVAR_DEFINE_INT32(android_cpu_report, 10, "Android",
+                     "Every this many seconds, log the busiest threads' CPU use (percent of one "
+                     "core) and the GPU load when readable; 0 = off");
+REXCVAR_DEFINE_INT32(android_thread_dump, 0, "Android",
                      "Seconds after start to log every thread's call stack (where a stuck game "
                      "waits), and again 30 s later; 0 = off");
 
@@ -286,6 +293,106 @@ void DumpThreadStacks(int pass) {
   }
   closedir(tasks);
 }
+
+// utime + stime of a /proc stat line, in clock ticks.
+uint64_t CpuTicks(const std::string& stat) {
+  size_t close = stat.rfind(')');
+  if (close == std::string::npos) {
+    return 0;
+  }
+  // Fields after ") ": state(3) ... utime(14) stime(15).
+  const char* p = stat.c_str() + close + 2;
+  uint64_t utime = 0, stime = 0;
+  for (int field = 3; field <= 15 && *p; ++field) {
+    if (field == 14) {
+      utime = std::strtoull(p, nullptr, 10);
+    } else if (field == 15) {
+      stime = std::strtoull(p, nullptr, 10);
+    }
+    p = std::strchr(p, ' ');
+    if (!p) {
+      break;
+    }
+    ++p;
+  }
+  return utime + stime;
+}
+
+// Where the time goes: one line per report with the busiest threads (a thread
+// near 100 % of a core limits the frame rate) and the GPU load (kgsl).
+void CpuReportLoop() {
+  std::map<pid_t, uint64_t> last;
+  auto last_time = std::chrono::steady_clock::now();
+  const long ticks_per_second = sysconf(_SC_CLK_TCK);
+  while (true) {
+    int interval = REXCVAR_GET(android_cpu_report);
+    if (interval <= 0) {
+      return;
+    }
+    std::this_thread::sleep_for(std::chrono::seconds(interval));
+    auto now = std::chrono::steady_clock::now();
+    double seconds = std::chrono::duration<double>(now - last_time).count();
+    last_time = now;
+    std::vector<std::pair<double, std::string>> busy;
+    std::map<pid_t, uint64_t> current;
+    double total = 0;
+    if (DIR* tasks = opendir("/proc/self/task")) {
+      while (dirent* entry = readdir(tasks)) {
+        pid_t tid = static_cast<pid_t>(std::atoi(entry->d_name));
+        if (tid <= 0) {
+          continue;
+        }
+        std::string base = "/proc/self/task/" + std::to_string(tid);
+        uint64_t ticks = CpuTicks(ReadSmallFile(base + "/stat"));
+        current[tid] = ticks;
+        auto it = last.find(tid);
+        if (it == last.end() || ticks < it->second) {
+          continue;
+        }
+        double percent = 100.0 * double(ticks - it->second) / double(ticks_per_second) / seconds;
+        total += percent;
+        if (percent >= 3.0) {
+          std::string name = ReadSmallFile(base + "/comm");
+          while (!name.empty() && (name.back() == '\n' || name.back() == '\r')) {
+            name.pop_back();
+          }
+          busy.emplace_back(percent, name + "/" + std::to_string(tid));
+        }
+      }
+      closedir(tasks);
+    }
+    bool first = last.empty();
+    last = std::move(current);
+    if (first) {
+      continue;
+    }
+    std::sort(busy.begin(), busy.end(), [](auto& a, auto& b) { return a.first > b.first; });
+    std::string line;
+    for (size_t i = 0; i < busy.size() && i < 8; ++i) {
+      char item[96];
+      std::snprintf(item, sizeof(item), "%s%s %.0f%%", i ? ", " : "", busy[i].second.c_str(),
+                    busy[i].first);
+      line += item;
+    }
+    // Readable on some phones only.
+    std::string gpu = ReadSmallFile("/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage");
+    while (!gpu.empty() && (gpu.back() == '\n' || gpu.back() == ' ')) {
+      gpu.pop_back();
+    }
+    REXLOG_INFO("[CpuReport] process {:.0f}% of a core; GPU busy {}; busiest: {}", total,
+                gpu.empty() ? "n/a" : gpu, line);
+  }
+}
+
+struct CpuReportStarter {
+  CpuReportStarter() {
+    std::thread([] {
+      // The cvars are parsed by then.
+      std::this_thread::sleep_for(std::chrono::seconds(5));
+      CpuReportLoop();
+    }).detach();
+  }
+} g_cpu_report_starter;
 
 struct ThreadDumpStarter {
   ThreadDumpStarter() {
