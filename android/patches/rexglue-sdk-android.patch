@@ -796,7 +796,7 @@ index b52bf39..af2df73 100644
  
    // Use /dev/ashmem on API versions below 26, which added ASharedMemory.
 diff --git a/src/core/threading_posix.cpp b/src/core/threading_posix.cpp
-index 9ac8d15..d9011c5 100644
+index 9ac8d15..02827bb 100644
 --- a/src/core/threading_posix.cpp
 +++ b/src/core/threading_posix.cpp
 @@ -71,14 +71,11 @@ static void* android_libc_;
@@ -828,7 +828,7 @@ index 9ac8d15..d9011c5 100644
      // Use robust mutexes so waits can recover if owner thread terminates.
      pthread_mutexattr_t attr;
      if (pthread_mutexattr_init(&attr) == 0) {
-@@ -287,10 +284,28 @@ class PosixConditionBase {
+@@ -287,10 +284,54 @@ class PosixConditionBase {
    virtual ~PosixConditionBase() = default;
    virtual bool Signal() = 0;
  
@@ -844,8 +844,34 @@ index 9ac8d15..d9011c5 100644
 +
 +  WaitResult Wait(std::chrono::milliseconds timeout) { return WaitSince(timeout, kNoGeneration); }
 +
++  // Counts the calling thread as waiting from now on, until EndWait, so a
++  // set / release in between is handed to it (as the console's kernel queues
++  // a waiter before SignalAndWait signals, and keeps an alertable waiter
++  // queued while it runs APCs). Returns the generation for WaitSince with
++  // `registered`.
++  uint64_t BeginWait() {
++    std::lock_guard<std::mutex> lock(mutex_);
++    ++blocked_waiters_;
++    return pulse_generation_;
++  }
++
++  // `satisfied`: the last WaitSince returned kSuccess. Otherwise a handoff
++  // that came for this waiter goes back to the object for the next one.
++  void EndWait(bool satisfied) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    --blocked_waiters_;
++    if (!satisfied && pulse_tickets_ != std::numeric_limits<uint32_t>::max() &&
++        pulse_tickets_ > blocked_waiters_) {
++      --pulse_tickets_;
++      ReturnHandOff();
++      cond_.notify_all();
++    }
++  }
++
 +  // Wait, also released by a pulse after pulse generation `since`.
-+  WaitResult WaitSince(std::chrono::milliseconds timeout, uint64_t since) {
++  // `registered`: between BeginWait and EndWait.
++  WaitResult WaitSince(std::chrono::milliseconds timeout, uint64_t since,
++                       bool registered = false) {
      bool executed;
 -    auto predicate = [this] { return this->signaled(); };
 -#if REX_PLATFORM_LINUX
@@ -860,7 +886,7 @@ index 9ac8d15..d9011c5 100644
      auto native_mutex = static_cast<pthread_mutex_t*>(mutex_.native_handle());
      int lock_result = pthread_mutex_lock(native_mutex);
      if (lock_result == EOWNERDEAD) {
-@@ -302,18 +317,29 @@ class PosixConditionBase {
+@@ -302,18 +343,33 @@ class PosixConditionBase {
  #else
      std::unique_lock<std::mutex> lock(mutex_);
  #endif
@@ -870,14 +896,18 @@ index 9ac8d15..d9011c5 100644
      if (predicate()) {
        executed = true;
      } else {
-+      ++blocked_waiters_;
++      if (!registered) {
++        ++blocked_waiters_;
++      }
        if (timeout == std::chrono::milliseconds::max()) {
          cond_.wait(lock, predicate);
          executed = true;  // Did not time out;
        } else {
          executed = cond_.wait_for(lock, timeout, predicate);
        }
-+      --blocked_waiters_;
++      if (!registered) {
++        --blocked_waiters_;
++      }
      }
      if (executed) {
 -      post_execution();
@@ -891,7 +921,7 @@ index 9ac8d15..d9011c5 100644
        return WaitResult::kSuccess;
      } else {
        return WaitResult::kTimeout;
-@@ -344,7 +370,7 @@ class PosixConditionBase {
+@@ -344,7 +400,7 @@ class PosixConditionBase {
        locks.reserve(handles.size());
  
        for (size_t i = 0; i < handles.size(); ++i) {
@@ -900,10 +930,12 @@ index 9ac8d15..d9011c5 100644
          auto native_mutex = static_cast<pthread_mutex_t*>(handles[i]->mutex_.native_handle());
          int result = pthread_mutex_trylock(native_mutex);
          if (result == 0 || result == EOWNERDEAD) {
-@@ -428,8 +454,28 @@ class PosixConditionBase {
+@@ -428,8 +484,30 @@ class PosixConditionBase {
   protected:
    inline virtual bool signaled() const = 0;
    inline virtual void post_execution() = 0;
++  // Undoes one HandOffToWaiter whose waiter left without it (mutex_ held).
++  virtual void ReturnHandOff() {}
 +  static constexpr uint64_t kNoGeneration = ~uint64_t(0);
    std::condition_variable cond_;
    std::mutex mutex_;
@@ -929,7 +961,7 @@ index 9ac8d15..d9011c5 100644
  };
  
  // There really is no native POSIX handle for a single wait/signal construct
-@@ -448,6 +494,13 @@ class PosixCondition<Event> : public PosixConditionBase {
+@@ -448,6 +526,13 @@ class PosixCondition<Event> : public PosixConditionBase {
  
    bool Signal() override {
      auto lock = std::unique_lock<std::mutex>(mutex_);
@@ -943,7 +975,7 @@ index 9ac8d15..d9011c5 100644
      signal_ = true;
      cond_.notify_all();
      return true;
-@@ -458,6 +511,21 @@ class PosixCondition<Event> : public PosixConditionBase {
+@@ -458,6 +543,21 @@ class PosixCondition<Event> : public PosixConditionBase {
      signal_ = false;
    }
  
@@ -965,7 +997,15 @@ index 9ac8d15..d9011c5 100644
   private:
    inline bool signaled() const override { return signal_; }
    inline void post_execution() override {
-@@ -485,7 +553,13 @@ class PosixCondition<Semaphore> : public PosixConditionBase {
+@@ -465,6 +565,7 @@ class PosixCondition<Event> : public PosixConditionBase {
+       signal_ = false;
+     }
+   }
++  void ReturnHandOff() override { signal_ = true; }
+   bool signal_;
+   const bool manual_reset_;
+ };
+@@ -485,12 +586,19 @@ class PosixCondition<Semaphore> : public PosixConditionBase {
      if (out_previous_count) {
        *out_previous_count = count_;
      }
@@ -980,7 +1020,13 @@ index 9ac8d15..d9011c5 100644
      cond_.notify_all();
      return true;
    }
-@@ -876,8 +950,16 @@ class PosixCondition<Thread> : public PosixConditionBase {
+ 
+  private:
++  void ReturnHandOff() override { ++count_; }
+   inline bool signaled() const override { return count_ > 0; }
+   inline void post_execution() override {
+     count_--;
+@@ -876,8 +984,16 @@ class PosixCondition<Thread> : public PosixConditionBase {
      sigval value{};
      value.sival_ptr = this;
  #if REX_PLATFORM_ANDROID
@@ -999,50 +1045,87 @@ index 9ac8d15..d9011c5 100644
  #else
      int result = pthread_sigqueue(thread_, GetSystemSignal(SignalType::kThreadUserCallback), value);
  #endif
-@@ -1165,6 +1247,7 @@ WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::millise
+@@ -1165,19 +1281,26 @@ WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::millise
  
    ScopedAlertableState alertable_state_guard(true);
    auto deadline = ComputeAlertableDeadline(timeout);
-+  const uint64_t since = posix_wait_handle->condition().pulse_generation();
- 
+-
++  auto& condition = posix_wait_handle->condition();
++  // Stays a waiter between the slices, as while running callbacks.
++  const uint64_t since = condition.BeginWait();
++  WaitResult result;
    while (true) {
      if (DispatchCurrentThreadUserCallback()) {
-@@ -1173,7 +1256,8 @@ WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::millise
+-      return WaitResult::kUserCallback;
++      result = WaitResult::kUserCallback;
++      break;
+     }
      if (HasAlertableTimeoutElapsed(deadline)) {
-       return WaitResult::kTimeout;
+-      return WaitResult::kTimeout;
++      result = WaitResult::kTimeout;
++      break;
      }
 -    auto result = posix_wait_handle->condition().Wait(ComputeAlertableWaitTimeout(deadline));
-+    auto result = posix_wait_handle->condition().WaitSince(ComputeAlertableWaitTimeout(deadline),
-+                                                           since);
++    result = condition.WaitSince(ComputeAlertableWaitTimeout(deadline), since, true);
      if (result != WaitResult::kTimeout) {
-       return result;
+-      return result;
++      break;
      }
-@@ -1188,12 +1272,14 @@ WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_han
+   }
++  condition.EndWait(result == WaitResult::kSuccess);
++  return result;
+ }
+ 
+ WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_handle_to_wait_on,
+@@ -1188,28 +1311,42 @@ WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_han
    if (posix_wait_handle_to_signal == nullptr || posix_wait_handle_to_wait_on == nullptr) {
      return WaitResult::kFailed;
    }
 +  auto& wait_condition = posix_wait_handle_to_wait_on->condition();
-+  const uint64_t since = wait_condition.pulse_generation();
++  // Atomic like the console's: this thread waits on the object before the
++  // other one is signaled, so a set that the signal lets another thread make
++  // right away comes to this thread. Waiting only after signaling let that
++  // other thread, waiting on the same object next, take the set back: both
++  // then slept forever (the in-fight freeze).
++  const uint64_t since = wait_condition.BeginWait();
    if (!posix_wait_handle_to_signal->condition().Signal()) {
++    wait_condition.EndWait(false);
      return WaitResult::kFailed;
    }
  
    if (!is_alertable) {
 -    return posix_wait_handle_to_wait_on->condition().Wait(timeout);
-+    return wait_condition.WaitSince(timeout, since);
++    result = wait_condition.WaitSince(timeout, since, true);
++    wait_condition.EndWait(result == WaitResult::kSuccess);
++    return result;
    }
  
    ScopedAlertableState alertable_state_guard(true);
-@@ -1205,7 +1291,7 @@ WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_han
+   auto deadline = ComputeAlertableDeadline(timeout);
+   while (true) {
+     if (DispatchCurrentThreadUserCallback()) {
+-      return WaitResult::kUserCallback;
++      result = WaitResult::kUserCallback;
++      break;
+     }
      if (HasAlertableTimeoutElapsed(deadline)) {
-       return WaitResult::kTimeout;
+-      return WaitResult::kTimeout;
++      result = WaitResult::kTimeout;
++      break;
      }
 -    result = posix_wait_handle_to_wait_on->condition().Wait(ComputeAlertableWaitTimeout(deadline));
-+    result = wait_condition.WaitSince(ComputeAlertableWaitTimeout(deadline), since);
++    result = wait_condition.WaitSince(ComputeAlertableWaitTimeout(deadline), since, true);
      if (result != WaitResult::kTimeout) {
-       return result;
+-      return result;
++      break;
      }
-@@ -1252,13 +1338,7 @@ class PosixEvent : public PosixConditionHandle<Event> {
+   }
++  wait_condition.EndWait(result == WaitResult::kSuccess);
++  return result;
+ }
+ 
+ std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* wait_handles[], size_t wait_handle_count,
+@@ -1252,13 +1389,7 @@ class PosixEvent : public PosixConditionHandle<Event> {
    ~PosixEvent() override = default;
    void Set() override { handle_.Signal(); }
    void Reset() override { handle_.Reset(); }
