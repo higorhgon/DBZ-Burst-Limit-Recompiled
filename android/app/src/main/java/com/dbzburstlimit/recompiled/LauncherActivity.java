@@ -49,6 +49,7 @@ public class LauncherActivity extends Activity {
 
     private static final int REQUEST_ISO = 1;
     private static final int REQUEST_FOLDER = 2;
+    private static final int REQUEST_DRIVER = 3;
     private static final long SPACE_MARGIN = 64L << 20;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -158,23 +159,10 @@ public class LauncherActivity extends Activity {
         LinearLayout advanced = card();
         advanced.addView(heading(getString(R.string.section_advanced)));
         advanced.addView(text(getString(R.string.gpu_driver), 14), margins(-1, dp(8)));
-        android.widget.RadioGroup driver = new android.widget.RadioGroup(this);
-        String[] driverValues = {"auto", "turnip", "system"};
-        int[] driverLabels = {R.string.gpu_driver_auto, R.string.gpu_driver_turnip, R.string.gpu_driver_system};
-        String currentDriver = prefs.getString(PREF_GPU_DRIVER, "auto");
-        for (int i = 0; i < driverValues.length; i++) {
-            android.widget.RadioButton option = new android.widget.RadioButton(this);
-            option.setId(View.generateViewId());
-            option.setText(driverLabels[i]);
-            option.setTag(driverValues[i]);
-            driver.addView(option);
-            if (driverValues[i].equals(currentDriver)) {
-                driver.check(option.getId());
-            }
-        }
-        driver.setOnCheckedChangeListener((group, id) -> prefs.edit()
-            .putString(PREF_GPU_DRIVER, (String) group.findViewById(id).getTag()).apply());
-        advanced.addView(driver, margins(-1, dp(4)));
+        driverGroup = new android.widget.RadioGroup(this);
+        fillDriverOptions();
+        advanced.addView(driverGroup, margins(-1, dp(4)));
+        advanced.addView(button(getString(R.string.import_driver), v -> pickDriver()), margins(-1, dp(6)));
         TextView extraLabel = text(getString(R.string.extra_args), 13);
         extraLabel.setAlpha(0.7f);
         advanced.addView(extraLabel, margins(-1, dp(8)));
@@ -456,6 +444,64 @@ public class LauncherActivity extends Activity {
         });
     }
 
+    private android.widget.RadioGroup driverGroup;
+
+    /** Automatic / bundled Turnip / phone's driver, plus the imported driver once there is one. */
+    private void fillDriverOptions() {
+        driverGroup.setOnCheckedChangeListener(null);
+        driverGroup.removeAllViews();
+        java.util.List<String> values = new java.util.ArrayList<>(java.util.Arrays.asList("auto", "turnip", "system"));
+        java.util.List<String> labels = new java.util.ArrayList<>(java.util.Arrays.asList(
+            getString(R.string.gpu_driver_auto), getString(R.string.gpu_driver_turnip),
+            getString(R.string.gpu_driver_system)));
+        String custom = prefs.getString(DriverImport.PREF_CUSTOM_DRIVER_NAME, null);
+        if (custom != null && new File(DriverImport.dir(this),
+                prefs.getString(DriverImport.PREF_CUSTOM_DRIVER_LIB, "")).isFile()) {
+            values.add("custom");
+            labels.add(getString(R.string.gpu_driver_custom, custom));
+        }
+        String current = prefs.getString(PREF_GPU_DRIVER, "auto");
+        for (int i = 0; i < values.size(); i++) {
+            android.widget.RadioButton option = new android.widget.RadioButton(this);
+            option.setId(View.generateViewId());
+            option.setText(labels.get(i));
+            option.setTag(values.get(i));
+            driverGroup.addView(option);
+            if (values.get(i).equals(current)) {
+                driverGroup.check(option.getId());
+            }
+        }
+        driverGroup.setOnCheckedChangeListener((group, id) -> {
+            View option = group.findViewById(id);
+            if (option != null) {
+                prefs.edit().putString(PREF_GPU_DRIVER, (String) option.getTag()).apply();
+            }
+        });
+    }
+
+    private void pickDriver() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        startActivityForResult(intent, REQUEST_DRIVER);
+    }
+
+    private void importDriver(Uri uri) {
+        new Thread(() -> {
+            String message;
+            try {
+                message = getString(R.string.driver_imported, DriverImport.install(this, uri));
+            } catch (IOException | RuntimeException e) {
+                message = getString(R.string.error, e.getMessage());
+            }
+            final String text = message;
+            ui.post(() -> {
+                fillDriverOptions();
+                android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_LONG).show();
+            });
+        }, "import-driver").start();
+    }
+
     private void pickFolder() {
         confirmReplace(() -> {
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
@@ -487,6 +533,8 @@ public class LauncherActivity extends Activity {
             runJob(() -> importIso(uri));
         } else if (requestCode == REQUEST_FOLDER) {
             runJob(() -> importFolder(uri));
+        } else if (requestCode == REQUEST_DRIVER) {
+            importDriver(uri);
         }
     }
 

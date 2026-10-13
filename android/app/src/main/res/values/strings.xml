@@ -46,4 +46,7 @@
     <string name="gpu_driver_auto">Automatic (the phone\'s driver)</string>
     <string name="gpu_driver_turnip">Mesa Turnip (bundled)</string>
     <string name="gpu_driver_system">Phone\'s own driver</string>
+    <string name="import_driver">Import driver (.zip)</string>
+    <string name="gpu_driver_custom">Imported: %1$s</string>
+    <string name="driver_imported">Driver installed and selected: %1$s</string>
 </resources>

@@ -76,21 +76,34 @@ public class GameActivity extends SDLActivity {
      * it. True when Turnip is in use.
      */
     private boolean loadVulkanDriver() {
-        String choice = getSharedPreferences(LauncherActivity.PREFS, MODE_PRIVATE)
-            .getString(LauncherActivity.PREF_GPU_DRIVER, "auto");
+        SharedPreferences prefs = getSharedPreferences(LauncherActivity.PREFS, MODE_PRIVATE);
+        String choice = prefs.getString(LauncherActivity.PREF_GPU_DRIVER, "auto");
         // Automatic = the phone's driver: on the Adreno 740 it ran the fights
-        // faster than Turnip (21 vs 16 FPS, both GPU-bound) and draws them right.
-        if (!choice.equals("turnip")) {
+        // faster than the bundled Turnip (21 vs 16 FPS, both GPU-bound).
+        if (!choice.equals("turnip") && !choice.equals("custom")) {
             android.util.Log.w("burstlimit-driver", "Vulkan driver: system driver (" + choice + ")");
             return false;
         }
         try {
-            File dir = new File(getFilesDir(), "drivers/turnip");
-            if (!copyDriverAsset("drivers/turnip/" + TURNIP_LIB, new File(dir, TURNIP_LIB))) {
-                android.util.Log.w("burstlimit-driver", "Vulkan driver: system driver (no Turnip in this APK)");
-                return false;
+            File dir;
+            String library;
+            if (choice.equals("custom")) {
+                // Imported in the launcher (DriverImport).
+                dir = DriverImport.dir(this);
+                library = prefs.getString(DriverImport.PREF_CUSTOM_DRIVER_LIB, "");
+                if (library.isEmpty() || !new File(dir, library).isFile()) {
+                    android.util.Log.w("burstlimit-driver", "Vulkan driver: system driver (imported driver missing)");
+                    return false;
+                }
+            } else {
+                dir = new File(getFilesDir(), "drivers/turnip");
+                library = TURNIP_LIB;
+                if (!copyDriverAsset("drivers/turnip/" + TURNIP_LIB, new File(dir, TURNIP_LIB))) {
+                    android.util.Log.w("burstlimit-driver", "Vulkan driver: system driver (no Turnip in this APK)");
+                    return false;
+                }
             }
-            return nativeLoadVulkanDriver(dir.getAbsolutePath(), TURNIP_LIB,
+            return nativeLoadVulkanDriver(dir.getAbsolutePath(), library,
                 getApplicationInfo().nativeLibraryDir).startsWith("Turnip");
         } catch (Throwable t) {
             android.util.Log.w("burstlimit-driver", "Vulkan driver: system driver (" + t + ")", t);

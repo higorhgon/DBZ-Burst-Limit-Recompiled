@@ -79,6 +79,11 @@ launcher picks *Automatic* (the phone's own driver: faster in the fights on the 
 phone's own driver*. If Turnip doesn't find the GPU, the phone's driver is used; "View log" shows which one ran
 (`burstlimit-driver` line).
 
+**Import driver (.zip)** installs another Turnip build from your storage, in the AdrenoTools package
+format the Xenia ports use (a `.so` plus `meta.json`), and selects it as *Imported*. On a Galaxy S23
+(8 Gen 2, One UI) a build with the One UI UBWC hint, such as "Turnip v26.3.0 r2 8G2-OneUI", ran much better
+in another Xenia port than the bundled one.
+
 The Termux build downloads both, pinned by commit / SHA-256: libadrenotools (BSD-2-Clause) into
 `thirdparty/libadrenotools`, and Turnip v26.0.0 R8 from
 [K11MCH1/AdrenoToolsDrivers](https://github.com/K11MCH1/AdrenoToolsDrivers) (Mesa, MIT).

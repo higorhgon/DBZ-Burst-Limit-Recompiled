@@ -44,4 +44,7 @@
     <string name="gpu_driver_auto">Automático (driver do celular)</string>
     <string name="gpu_driver_turnip">Mesa Turnip (incluído)</string>
     <string name="gpu_driver_system">Driver do próprio celular</string>
+    <string name="import_driver">Importar driver (.zip)</string>
+    <string name="gpu_driver_custom">Importado: %1$s</string>
+    <string name="driver_imported">Driver instalado e selecionado: %1$s</string>
 </resources>
