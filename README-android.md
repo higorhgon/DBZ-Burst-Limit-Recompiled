@@ -95,7 +95,9 @@ The Termux build downloads both, pinned by commit / SHA-256: libadrenotools (BSD
 GPU options for testing (put them in **Extra settings**): `--vulkan_disable_depth_unorm24=true` (32-bit
 float depth instead of D24). `--gpu_force_msaa_off=true` breaks this game's picture.
 `--direct_host_resolve=false` turns off the direct resolve (below), to compare. `--vulkan_occlusion_query_async=false`
-waits for the GPU at the end of every occlusion query again (the old, slower behavior). The log has a
+waits for the GPU at the end of every occlusion query again (the old, slower behavior).
+`--vulkan_in_pass_transfers=false` draws render target ownership transfers in their own render passes
+again (by default they go into the guest draw's render pass when possible, as in XenDroid). The log has a
 `[FrameStats]` line (GPU work per frame; "direct" counts the resolves that took the direct path) and a
 `[CpuReport]` line (busiest threads, GPU load) every 10 s.
 
