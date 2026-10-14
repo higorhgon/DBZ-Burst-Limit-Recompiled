@@ -176,7 +176,7 @@ index 34f7033..b73ebc3 100644
    uint64_t direct_resolve_success_count_ = 0;
    uint64_t direct_resolve_fallback_count_ = 0;
 diff --git a/include/rex/input/sdl/sdl_input_driver.h b/include/rex/input/sdl/sdl_input_driver.h
-index be1f9b8..a102571 100644
+index be1f9b8..c5539d1 100644
 --- a/include/rex/input/sdl/sdl_input_driver.h
 +++ b/include/rex/input/sdl/sdl_input_driver.h
 @@ -12,6 +12,7 @@
@@ -187,14 +187,19 @@ index be1f9b8..a102571 100644
  #include <mutex>
  #include <optional>
  #include <vector>
-@@ -65,6 +66,10 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener
+@@ -65,6 +66,15 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener
      bool state_changed;
      bool is_active;
      DeviceId id;
 +    // Presses still reported after the button went up, until the guest has read them and they
 +    // lasted input_min_press_ms (a tap between two reads was lost at a low frame rate).
 +    uint16_t held_buttons = 0;
++    // Shown released for one read between two latched taps, so a second tap during the first
++    // one's latch isn't merged into it.
++    uint16_t gap_buttons = 0;
 +    std::chrono::steady_clock::time_point pressed_at[16] = {};
++    // Taps that came while the button was still latched, played back one by one.
++    uint8_t queued_taps[16] = {};
      // Per pad rather than per guest user, so it survives reassignment.
      KeystrokeState keystroke;
    };
@@ -2601,7 +2606,7 @@ index 6788214..c466026 100644
      case Usage::kTransferDestination:
        stage_mask = VK_PIPELINE_STAGE_TRANSFER_BIT;
 diff --git a/src/input/sdl/sdl_input_driver.cpp b/src/input/sdl/sdl_input_driver.cpp
-index 57f65c4..2634af5 100644
+index 57f65c4..f659628 100644
 --- a/src/input/sdl/sdl_input_driver.cpp
 +++ b/src/input/sdl/sdl_input_driver.cpp
 @@ -23,6 +23,13 @@
@@ -2618,40 +2623,63 @@ index 57f65c4..2634af5 100644
  REXCVAR_DEFINE_STRING(hid_mappings_file, "gamecontrollerdb.txt", "Input",
                        "Path to SDL gamecontroller mappings file");
  
-@@ -340,6 +347,22 @@ X_RESULT SDLInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+@@ -340,6 +347,37 @@ X_RESULT SDLInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
      controller->state_changed = false;
    }
    std::memcpy(out_state, &controller->state, sizeof(*out_state));
-+  if (controller->held_buttons) {
++  if (controller->held_buttons || controller->gap_buttons) {
 +    out_state->gamepad.buttons =
-+        uint16_t(uint16_t(out_state->gamepad.buttons) | controller->held_buttons);
++        uint16_t((uint16_t(out_state->gamepad.buttons) | controller->held_buttons) &
++                 ~controller->gap_buttons);
 +    const uint16_t current = controller->state.gamepad.buttons;
 +    const auto now = std::chrono::steady_clock::now();
 +    const auto min_press = std::chrono::milliseconds(std::max(0, REXCVAR_GET(input_min_press_ms)));
 +    for (uint32_t bit = 0; bit < 16; ++bit) {
 +      const uint16_t mask = uint16_t(1u << bit);
-+      if ((controller->held_buttons & mask) && !(current & mask) &&
-+          now - controller->pressed_at[bit] >= min_press) {
-+        // Released, read and long enough: the next read shows the release.
-+        controller->held_buttons &= ~mask;
++      if (controller->gap_buttons & mask) {
++        // The release between two taps was read: play the next tap.
++        controller->gap_buttons &= ~mask;
++        controller->held_buttons |= mask;
++        controller->pressed_at[bit] = now;
 +        controller->state_changed = true;
++      } else if ((controller->held_buttons & mask) &&
++                 now - controller->pressed_at[bit] >= min_press) {
++        if (controller->queued_taps[bit]) {
++          // Read and long enough, another tap waiting: show a release first.
++          --controller->queued_taps[bit];
++          controller->held_buttons &= ~mask;
++          controller->gap_buttons |= mask;
++          controller->state_changed = true;
++        } else if (!(current & mask)) {
++          // Released, read and long enough: the next read shows the release.
++          controller->held_buttons &= ~mask;
++          controller->state_changed = true;
++        }
 +      }
 +    }
 +  }
    if (!is_active) {
      // Simulate an "untouched" controller. When we become active again the
      // pressed buttons aren't lost and will be visible again.
-@@ -746,6 +769,14 @@ void SDLInputDriver::OnControllerDeviceButtonChangedLocked(const SDL_Event& even
+@@ -746,6 +784,22 @@ void SDLInputDriver::OnControllerDeviceButtonChangedLocked(const SDL_Event& even
        return;
      }
      xbuttons |= xbutton;
 +    if (REXCVAR_GET(input_min_press_ms) > 0) {
 +      for (uint32_t bit = 0; bit < 16; ++bit) {
-+        if (xbutton & (1u << bit)) {
++        if (!(xbutton & (1u << bit))) {
++          continue;
++        }
++        if ((controller.held_buttons | controller.gap_buttons) & (1u << bit)) {
++          // Still latched from the last tap: the game hasn't seen that one end yet.
++          if (controller.queued_taps[bit] < 4) {
++            ++controller.queued_taps[bit];
++          }
++        } else {
 +          controller.pressed_at[bit] = std::chrono::steady_clock::now();
++          controller.held_buttons |= uint16_t(1u << bit);
 +        }
 +      }
-+      controller.held_buttons |= xbutton;
 +    }
    } else {
      xbuttons &= ~xbutton;
